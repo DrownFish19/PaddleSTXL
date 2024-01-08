@@ -1,3 +1,4 @@
+import argparse
 import gzip
 import os
 import shutil
@@ -109,5 +110,11 @@ def load_txt_file_into_mysql(
         os.remove(txt_filepath)
 
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--filename-filter", type=str, default="2019_01")
+args = parser.parse_args()
+
 cnx = connect_mysql(ip="127.0.0.1", port="3306", username="root", password="wonder")
-load_txt_file_into_mysql(cnx, "/var/lib/mysql-files", filename_filter="2019_01")
+load_txt_file_into_mysql(
+    cnx, "/var/lib/mysql-files", filename_filter=args.filename_filter
+)
