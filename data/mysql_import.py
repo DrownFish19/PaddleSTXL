@@ -81,7 +81,9 @@ def connect_mysql(ip, port, username, password):
     )
 
 
-def load_txt_file_into_mysql(mysql_cnx, base_path, temp_path="/var/lib/mysql-files"):
+def load_txt_file_into_mysql(
+    mysql_cnx, base_path, temp_path="/var/lib/mysql-files", filename_filter=""
+):
     """list each file in the directory and load it into mysql
         the base sql cmd is base_sql_line.
     Args:
@@ -90,6 +92,8 @@ def load_txt_file_into_mysql(mysql_cnx, base_path, temp_path="/var/lib/mysql-fil
     cursor = mysql_cnx.cursor()
     for file_name in os.listdir(base_path):
         if not file_name.endswith(".txt.gz"):
+            continue
+        if filename_filter not in file_name:
             continue
 
         gz_filepath = os.path.join(base_path, file_name)
@@ -106,4 +110,4 @@ def load_txt_file_into_mysql(mysql_cnx, base_path, temp_path="/var/lib/mysql-fil
 
 
 cnx = connect_mysql(ip="127.0.0.1", port="3306", username="root", password="wonder")
-load_txt_file_into_mysql(cnx, "/var/lib/mysql-files")
+load_txt_file_into_mysql(cnx, "/var/lib/mysql-files", filename_filter="2019_01")
