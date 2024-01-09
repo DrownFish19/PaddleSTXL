@@ -1,6 +1,7 @@
 import os
 
 import pandas as pd
+from mysql_import import connect_mysql
 
 
 def filter_data():
@@ -133,5 +134,35 @@ def data_check():
             )
 
 
+def get_id_intersection(cnx, start_date, end_date, freq="5T"):
+    time_range = pd.date_range(start=start_date, end=end_date, freq=freq)
+    base_sql = "select ID from pems_5min where Timestamp = '{}'"
+    cursor = cnx.cursor()
+
+    all_ids = []
+    for timestamp in time_range:
+        cur_sql = base_sql.format(timestamp)
+        print(cur_sql)
+        cursor.execute(cur_sql)
+        ids = cursor.fetchall()
+        all_ids.append(ids)
+
+    if len(all_ids) > 0:
+        # compute intersection
+        intersection = set(all_ids[0])
+        for ids in all_ids[1:]:
+            intersection = intersection & set(ids)
+            print(len(intersection))
+            print(intersection)
+
+        with open("intersection.txt", "w") as f:
+            for id in intersection:
+                f.write(str(id[0]) + "\n")
+    return intersection
+
+
 if __name__ == "__main__":
-    sort_by_timestamp()
+    cnx = connect_mysql(ip="127.0.0.1", port="3306", username="root", password="wonder")
+    start_date = "2019-01-01 00:00:00"
+    end_date = "2019-01-31 23:55:00"
+    get_id_intersection(None, start_date, end_date, "5T")
