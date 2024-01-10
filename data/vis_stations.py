@@ -9,7 +9,7 @@ import pandas as pd
 # 311844,3,38.412421,-121.484436
 # 311845,3,38.406175,-121.483002
 
-df = pd.read_csv("data/pems_station.csv")
+df = pd.read_csv("data/pems_stations.csv")
 
 color_list = [
     "red",
@@ -17,7 +17,6 @@ color_list = [
     "green",
     "purple",
     "orange",
-    "darkred",
     "lightred",
     "beige",
     "darkblue",
@@ -34,14 +33,18 @@ color_list = [
 ]
 
 
-m = folium.Map(location=[df["lon"].mean(), df["lat"].mean()], zoom_start=10)
+m = [
+    folium.Map(location=[df["lon"].mean(), df["lat"].mean()], zoom_start=10)
+    for _ in range(12)
+]
 
 for i, row in df.iterrows():
     print(i)
     folium.Marker(
         location=[row["lat"], row["lon"]],
-        tooltip=row["ID"],
+        tooltip=int(row["ID"]),
         icon=folium.Icon(color=color_list[int(row["dist"])]),
-    ).add_to(m)
+    ).add_to(m[int(row["dist"]) - 1])
 
-m.save("stations_map.html")
+for i in range(12):
+    m[i].save(f"stations_map_{i+1}.html")
