@@ -2,8 +2,10 @@ import argparse
 import gzip
 import os
 import shutil
+import pandas as pd
 
 import mysql.connector
+from sqlalchemy import create_engine
 
 base_sql_line = (
     "load data infile '{}' "
@@ -109,6 +111,16 @@ def load_txt_file_into_mysql(
         print(txt_filepath, flush=True)
         os.remove(txt_filepath)
 
+def load_station_file_into_mysql(
+    mysql_cnx, base_path, filename_filter=""
+):
+    for file_name in os.listdir(base_path):
+        if not file_name.endswith(".txt"):
+            continue
+        df = pd.read_csv(os.path.join(base_path, file_name),sep='\t')
+        df ['Change_Date'] = pd.to_datetime(file_name.split('.')[0][-10:], format='%Y_%m_%d')
+        df.to_sql('stations',mysql_cnx,if_exists='append',index=False)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -119,3 +131,7 @@ if __name__ == "__main__":
     load_txt_file_into_mysql(
         cnx, "/var/lib/mysql-files", filename_filter=args.filename_filter
     )
+    
+    # Replace 'username', 'password', 'localhost', 'dbname' with your actual MySQL username, password, host, and database name
+    engine = create_engine('mysql+mysqlconnector://root:wonder@192.168.188.222/traffic_flow')
+    load_station_file_into_mysql(engine,"/home/ubuntu/Downloads/PEMSMETA")
