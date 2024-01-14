@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import paddle
 
@@ -118,3 +120,20 @@ class ScalerMinMax(object):
             return 1.0 * data * (_max[axis] - _min[axis]) + _min[axis]
         else:
             return 1.0 * data * (_max[axis] - _min[axis]) + _min[axis]
+
+
+# 简化的哈弗辛公式来计算地球上两点之间的距离
+def haversine(lon1, lat1, lon2, lat2):
+    # 将十进制度数转化为弧度
+    lon1, lat1, lon2, lat2 = map(math.radians, [lon1, lat1, lon2, lat2])
+
+    # 哈弗辛公式
+    dis_lon = lon2 - lon1
+    dis_lat = lat2 - lat1
+    a = (
+        math.sin(dis_lat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dis_lon / 2) ** 2
+    )
+    c = 2 * math.asin(math.sqrt(a))
+    r = 6371  # 地球平均半径，单位为公里
+    return c * r
