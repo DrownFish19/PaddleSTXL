@@ -70,7 +70,7 @@ class GraphST:
                     self.edge_dst_idx.append(k)
                     self.edge_weights.append(distance[k])
 
-        self.edge_weights = [1 / w if w != 0 else 0 for w in self.edge_weights]
+        self.edge_weights = [1 / w if w != 0 else 1 for w in self.edge_weights]
         # Normalize the weights
         min_weight = min(self.edge_weights)
         max_weight = max(self.edge_weights)
