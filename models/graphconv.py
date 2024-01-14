@@ -49,7 +49,7 @@ class GraphST:
         self.node_nums = len(self.node_df)
         node_distances = {id: [] for id in self.node_df["ID"]}
         results = []
-        for i in range(19870, self.node_nums):
+        for i in range(self.node_nums):
             print(i)
             row_i = self.node_df.iloc[i]
             for j in range(i + 1, self.node_nums - 1):
