@@ -1,12 +1,13 @@
 import math
-import multiprocessing
 
+import numpy as np
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
 import pandas as pd
-import tqdm
 from geopy.distance import geodesic
+
+from dataset.data_utils import haversine
 
 
 def get_distance(row_i, row_j):
@@ -45,36 +46,29 @@ class GraphST:
 
     def build_graph(self):
         """build graph according to the node dataframe"""
-        pool = multiprocessing.Pool(processes=30)
         self.node_nums = len(self.node_df)
-        node_distances = {id: [] for id in self.node_df["ID"]}
-        results = []
+        lon = self.node_df["lon"].values
+        lat = self.node_df["lat"].values
+
+        node_distances = {}
         for i in range(self.node_nums):
-            print(i)
+            print(i, flush=True)
             row_i = self.node_df.iloc[i]
-            for j in range(i + 1, self.node_nums - 1):
-                row_j = self.node_df.iloc[j]
-                results.append(pool.apply_async(get_distance, args=(row_i, row_j)))
-        for res in tqdm.tqdm(results):
-            row_i_id, row_j_id, dist = res.get()
-            node_distances[row_i_id].append((row_j_id, dist))
-            node_distances[row_j_id].append((row_i_id, dist))
-            print(row_i_id, row_j_id, dist)
+            # haversine method to calculate the distance
+            distance = haversine(row_i["lon"], row_i["lat"], lon, lat)
+            node_distances[i] = distance
 
-        for id, dist_list in node_distances.items():
-            if len(dist_list) == 0:
+        for id, distance in node_distances.items():
+            if len(distance) == 0:
                 continue
-            dist_list.sort(key=lambda x: x[1])
-            need_add = [dist_list[0][0]]  # id
-            need_weights = [dist_list[0][1]]  # dist
-            for k in range(1, min(self.args.node_top_k, len(dist_list))):
-                if dist_list[k][1] < self.args.node_max_dis:
-                    need_add.append(dist_list[k][0])
-                    need_weights.append(dist_list[k][1])
+            topk_indices = np.argpartition(distance, self.args.node_top_k)
+            topk_indices = topk_indices[: self.args.node_top_k]
 
-            self.edge_src_idx.extend([id] * len(need_add))
-            self.edge_dst_idx.extend(need_add)
-            self.edge_weights.extend(need_weights)
+            for k in topk_indices:
+                if distance[k] < self.args.node_max_dis:
+                    self.edge_src_idx.append(id)
+                    self.edge_dst_idx.append(k)
+                    self.edge_weights.append(distance[k])
 
         self.edge_weights = [1 / w if w != 0 else 0 for w in self.edge_weights]
         # Normalize the weights
