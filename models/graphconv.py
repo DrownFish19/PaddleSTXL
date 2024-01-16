@@ -34,8 +34,10 @@ class GraphST:
             311832,3,38.409782,-121.48468
         """
         self.args = args
+        self.node_df = pd.read_csv(args.node_path)
+        self.node_nums = len(self.node_df)
+
         if build:
-            self.node_df = pd.read_csv(args.node_path)
             self.edge_src_idx = []
             self.edge_dst_idx = []
             self.edge_weights = []
@@ -52,7 +54,7 @@ class GraphST:
 
         node_distances = {}
         for i in range(self.node_nums):
-            print(i, flush=True)
+            # print(i, flush=True)
             row_i = self.node_df.iloc[i]
             # haversine method to calculate the distance
             distance = haversine(row_i["lon"], row_i["lat"], lon, lat)
@@ -64,18 +66,20 @@ class GraphST:
             topk_indices = np.argpartition(distance, self.args.node_top_k)
             topk_indices = topk_indices[: self.args.node_top_k]
 
+            # build undirected graph. from node with small num to node with big num
             for k in topk_indices:
-                if distance[k] < self.args.node_max_dis:
+                if id <= k and distance[k] < self.args.node_max_dis:
                     self.edge_src_idx.append(id)
                     self.edge_dst_idx.append(k)
                     self.edge_weights.append(distance[k])
 
-        self.edge_weights = [1 / w if w != 0 else 1 for w in self.edge_weights]
         # Normalize the weights
-        min_weight = min(self.edge_weights)
+        self.edge_weights = [-w for w in self.edge_weights]
         max_weight = max(self.edge_weights)
+        min_weight = min(self.edge_weights)
         self.edge_weights = [
-            (w - min_weight) / (max_weight - min_weight) for w in self.edge_weights
+            (w - min_weight) * 0.9 / (max_weight - min_weight) + 0.1
+            for w in self.edge_weights
         ]
 
     def load_graph(self):
