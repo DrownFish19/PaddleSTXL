@@ -1,3 +1,0 @@
-[submodule "ops/PaddleHSSInfo"]
-	path = ops/PaddleHSSInfo
-	url = https://github.com/DrownFish19/PaddleHSSInfo.git
