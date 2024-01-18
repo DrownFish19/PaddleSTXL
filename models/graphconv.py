@@ -99,38 +99,89 @@ class GraphST:
         dataframe.to_csv(self.args.adj_path, index=False)
 
 
-class GCN(nn.Layer):
-    def __init__(self, training_args, d_model, norm_adj_matrix, norm_sc_matrix):
-        super(GCN, self).__init__()
-        self.norm_adj_matrix = norm_adj_matrix
-        self.norm_sc_matrix = norm_sc_matrix
-        self.Theta = nn.Linear(
-            d_model,
-            d_model,
-            bias_attr=False,
+class SpatialGraphMLP(nn.Layer):
+    def __init__(
+        self, in_features, out_features, latent_features=None, layer_norm=True
+    ):
+        super().__init__()
+
+        if latent_features is None:
+            latent_features = out_features
+
+        self.mlp = nn.Sequential(
+            nn.Linear(in_features, latent_features, bias_attr=True),
+            nn.Silu(),
+            nn.Linear(latent_features, out_features, bias_attr=True),
         )
-        self.alpha = paddle.create_parameter(
-            shape=[1],
-            dtype=paddle.get_default_dtype(),
-        )
-        if training_args.no_adj:
-            self.alpha.set_value(paddle.to_tensor([0.0]))
-            self.alpha.stop_gradient = True
-        self.beta = paddle.create_parameter(shape=[1], dtype=paddle.get_default_dtype())
+        self.layer_norm = layer_norm
+        if layer_norm:
+            self.layer_norm = nn.LayerNorm(out_features)
+
+    def forward(self, feat):
+        if self.layer_norm:
+            out = self.layer_norm(self.mlp(feat))
+        else:
+            out = self.mlp(feat)
+        return out
+
+
+class SpatialGraphNeuralNetwork(nn.Layer):
+    def __init__(self, config, graph: GraphST):
+        super().__init__()
+        self.config = config
+        self.edge_in_dim = config.d_model * 2
+        self.edge_out_dim = config.d_model
+        self.node_in_dim = config.d_model * 2
+        self.node_out_dim = config.d_model
+
+        self.graph = graph
+
+        self.edge_layer = SpatialGraphMLP(self.edge_in_dim, self.edge_out_dim)
+        self.node_layer = SpatialGraphMLP(self.node_in_dim, self.node_out_dim)
 
     def forward(self, x):
+        """_summary_
+
+        Args:
+            x (paddle.Tensor): [B,T,N,D]
+
+        Returns:
+            _type_: _description_
         """
-        spatial graph convolution operation
-        :param x: (batch_size, N, F_in)
-        :return: (batch_size, N, F_out)
-        """
-        adj = paddle.add(
-            self.alpha * self.norm_adj_matrix,
-            self.beta * self.norm_sc_matrix,
+        # 更新edge特征
+        # 【B,T,N,D】
+        src_feat = paddle.gather(x, self.graph.edge_src_idx)
+        dst_feat = paddle.gather(x, self.graph.edge_dst_idx)
+
+        edge_feat_src2dst = paddle.concat([src_feat, dst_feat], axis=-1)
+        edge_feat_dst2src = paddle.concat([dst_feat, src_feat], axis=-1)
+        edge_feats_out_src2dst = self.edge_layer(edge_feat_src2dst)
+        edge_feats_out_dst2src = self.edge_layer(edge_feat_dst2src)
+
+        B, T, N, D = edge_feats_out_src2dst.shape
+        # 更新node特征
+        edge_feats_scatter = paddle.zeros([N, B, T, D])
+        # TODO: add shape convert
+        node_feats_concat = paddle.concat(
+            [
+                paddle.scatter(
+                    edge_feats_scatter,
+                    self.graph.edge_src_idx,
+                    edge_feats_out_dst2src,
+                    overwrite=False,
+                ),
+                paddle.scatter(
+                    edge_feats_scatter,
+                    self.graph.edge_dst_idx,
+                    edge_feats_out_src2dst,
+                    overwrite=False,
+                ),
+            ],
+            axis=-1,
         )
-        x_gcn = paddle.matmul(adj, x)
-        # [N,N][B,N,in]->[B,N,in]->[B,N,out]
-        return F.relu(self.Theta(x_gcn))
+        node_feats_out = self.node_layer(node_feats_concat)
+
+        return x + node_feats_out
 
 
 class SpatialAttentionLayer(nn.Layer):
@@ -144,50 +195,13 @@ class SpatialAttentionLayer(nn.Layer):
 
     def forward(self, x):
         """
-        :param x: (B, N, T, D)
+        :param x: (B, T, E, D)
         :return: (B, T, N, N)
         """
-        B, N, T, D = x.shape
+        B, T, E, D = x.shape
+
         x = x.transpose([0, 2, 1, 3])  # [B,T,N,F_in]
         # [B,T,N,F_in][B,T,F_in,N]=[B*T,N,N]
         score = paddle.matmul(x, x, transpose_y=True) / math.sqrt(D)
         score = self.dropout(F.softmax(score, axis=-1))  # [B,T,N,N]
         return score
-
-
-class SpatialAttentionGCN(nn.Layer):
-    def __init__(self, args, adj_matrix, sc_matrix, is_scale=True):
-        super(SpatialAttentionGCN, self).__init__()
-        self.norm_adj = adj_matrix
-        self.norm_sc = sc_matrix
-        self.args = args
-        self.linear = nn.Linear(args.d_model, args.d_model, bias_attr=False)
-        self.is_scale = is_scale
-        self.SAt = SpatialAttentionLayer(dropout=args.dropout)
-        self.alpha = paddle.create_parameter(
-            shape=[1], dtype=paddle.get_default_dtype()
-        )
-        if args.no_adj:
-            self.alpha.set_value(paddle.to_tensor([0.0]))
-            self.alpha.stop_gradient = True
-        self.beta = paddle.create_parameter(shape=[1], dtype=paddle.get_default_dtype())
-
-    def forward(self, x):
-        """
-        spatial graph convolution
-        :param x: (B, N, T, F_in)
-        :return: (B, N, T, F_out)
-        """
-        B, N, T, D = x.shape
-        spatial_attention = self.SAt(x)  # [B, T, N, N]
-        if self.is_scale:
-            spatial_attention = spatial_attention / math.sqrt(self.args.d_model)
-        x = x.transpose([0, 2, 1, 3])  # [B,T,N,D]
-
-        adj = paddle.add(
-            self.alpha * paddle.multiply(spatial_attention, self.norm_adj),
-            self.beta * paddle.multiply(spatial_attention, self.norm_sc),
-        )
-        x_gcn = paddle.matmul(adj, x)
-        # [B, N, T, D]
-        return F.relu(self.linear(x_gcn).transpose([0, 2, 1, 3]))
