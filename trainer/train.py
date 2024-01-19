@@ -4,25 +4,20 @@ from time import time
 
 import numpy as np
 import paddle
+import paddle.distributed.fleet as fleet
+import paddle.io as io
 import paddle.nn as nn
-import paddle.optimizer as optim
-from corrstn import CorrSTN
-from paddle.io import DataLoader
-from paddle.nn.initializer import XavierUniform
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+import paddle.optimizer as optimizer
+import sklearn.metrics as skmetrics
+from hssinfo import cluster
 
 from args import args
 from dataset import TrafficFlowDataset
-from utils import (
-    CosineAnnealingWithWarmupDecay,
-    EarlyStopping,
-    Logger,
-    get_adjacency_matrix_2direction,
-    masked_mape_np,
-    norm_adj_matrix,
-)
+from models import STNXL, GraphST
+from utils import Logger, masked_mape_np
 
 
+@contextlib.contextmanager
 def amp_guard_context(fp16=False):
     if fp16:
         return paddle.amp.auto_cast(level="O2")
@@ -32,7 +27,6 @@ def amp_guard_context(fp16=False):
 
 class Trainer:
     def __init__(self, training_args):
-
         self.training_args = training_args
 
         self.folder_dir = (
@@ -61,11 +55,10 @@ class Trainer:
         self.logger.info(f"log  file  : {self.logger.log_file}")
 
         self.finetune = False
-        self.early_stopping = EarlyStopping(patience=training_args.patience, delta=0.0)
 
         self._build_data()
         self._build_model()
-        self._build_optim()
+        self._build_optimizer()
         if training_args.distribute:
             self._build_distribute()
 
@@ -74,23 +67,14 @@ class Trainer:
         self.val_dataset = TrafficFlowDataset(self.training_args, "val")
         self.test_dataset = TrafficFlowDataset(self.training_args, "test")
 
-        self.train_dataloader = DataLoader(
-            self.train_dataset,
-            batch_size=self.training_args.batch_size,
-            shuffle=True,
-            drop_last=True,
+        self.train_dataloader = io.DataLoader(
+            self.train_dataset, batch_size=self.training_args.batch_size, shuffle=True
         )
-        self.eval_dataloader = DataLoader(
-            self.val_dataset,
-            batch_size=self.training_args.batch_size * 32,
-            shuffle=False,
-            drop_last=False,
+        self.eval_dataloader = io.DataLoader(
+            self.val_dataset, batch_size=self.training_args.batch_size * 32
         )
-        self.test_dataloader = DataLoader(
-            self.test_dataset,
-            batch_size=self.training_args.batch_size * 32,
-            shuffle=False,
-            drop_last=False,
+        self.test_dataloader = io.DataLoader(
+            self.test_dataset, batch_size=self.training_args.batch_size * 32
         )
 
         self.encoder_idx = []
@@ -115,24 +99,20 @@ class Trainer:
         self.encoder_idx = paddle.concat(self.encoder_idx)
 
     def _build_model(self):
-        default_dtype = paddle.get_default_dtype()
-        adj_matrix, _ = get_adjacency_matrix_2direction(self.training_args.adj_path, 80)
-        adj_matrix = paddle.to_tensor(norm_adj_matrix(adj_matrix), default_dtype)
-
-        sc_matrix = np.load(self.training_args.sc_path)[0, :, :]
-        sc_matrix = paddle.to_tensor(norm_adj_matrix(sc_matrix), default_dtype)
-
-        nn.initializer.set_global_initializer(XavierUniform(), XavierUniform())
-
-        self.net = CorrSTN(
-            self.training_args,
-            adj_matrix=adj_matrix,
-            sc_matrix=sc_matrix,
+        self.graph = GraphST(args=self.training_args, build=False)
+        self.cluster = cluster(
+            paddle.arange(self.graph.node_nums),
+            paddle.to_tensor(self.graph.edge_dst_idx, dtype=paddle.int32),
+            paddle.to_tensor(self.graph.edge_src_idx, dtype=paddle.int32),
+            paddle.to_tensor(self.graph.edge_weights, dtype=paddle.float32),
         )
+
+        nn.initializer.set_global_initializer(
+            nn.initializer.XavierUniform(), nn.initializer.XavierUniform()
+        )
+
+        self.net = STNXL(self.training_args, graph=self.graph)
         if self.training_args.continue_training:
-            # params_filename = os.path.join(
-            #     self.save_path, f"epoch_{self.start_epoch}.params"
-            # )
             params_filename = os.path.join(self.save_path, "epoch_best.params")
             self.net.set_state_dict(paddle.load(params_filename))
             self.logger.info(f"load weight from: {params_filename}")
@@ -155,18 +135,11 @@ class Trainer:
         self.criterion1 = nn.L1Loss()  # 定义损失函数
         self.criterion2 = nn.MSELoss()  # 定义损失函数
 
-    def _build_optim(self):
-        self.lr_scheduler = CosineAnnealingWithWarmupDecay(
-            max_lr=self.training_args.learning_rate,
-            min_lr=self.training_args.learning_rate * 0.1,
-            warmup_step=10,
-            decay_step=30,
-        )
-
+    def _build_optimizer(self):
         # 定义优化器，传入所有网络参数
-        self.optimizer = optim.AdamW(
+        self.optimizer = optimizer.AdamW(
             parameters=self.net.parameters(),
-            learning_rate=self.lr_scheduler,
+            learning_rate=self.training_args.lr_scheduler,
             weight_decay=self.training_args.weight_decay,
             multi_precision=True,
         )
@@ -176,12 +149,6 @@ class Trainer:
             self.logger.info(f"{var_name} \t {self.optimizer.state_dict()[var_name]}")
 
     def _build_distribute(self):
-        # 一、导入分布式专用 Fleet API
-        from paddle.distributed import fleet
-
-        # 构建分布式数据加载器所需 API
-        from paddle.io import DataLoader, DistributedBatchSampler
-
         # 二、初始化 Fleet 环境
         fleet.init(is_collective=True)
 
@@ -192,31 +159,24 @@ class Trainer:
         self.optimizer = fleet.distributed_optimizer(self.optimizer)
 
         # 五、构建分布式训练使用的数据集
-        train_sampler = DistributedBatchSampler(
-            self.train_dataset,
-            batch_size=self.training_args.batch_size,
-            shuffle=True,
-            drop_last=False,
+        train_sampler = io.DistributedBatchSampler(
+            self.train_dataset, batch_size=self.training_args.batch_size, shuffle=True
         )
-        self.train_dataloader = DataLoader(
+        eval_sampler = io.DistributedBatchSampler(
+            self.val_dataset, batch_size=self.training_args.batch_size
+        )
+
+        test_sampler = io.DistributedBatchSampler(
+            self.test_dataset, batch_size=self.training_args.batch_size
+        )
+
+        self.train_dataloader = io.DataLoader(
             self.train_dataset, batch_sampler=train_sampler, num_workers=2
         )
-        eval_sampler = DistributedBatchSampler(
-            self.val_dataset,
-            batch_size=self.training_args.batch_size * 32,
-            shuffle=False,
-            drop_last=False,
-        )
-        self.eval_dataloader = DataLoader(
+        self.eval_dataloader = io.DataLoader(
             self.val_dataset, batch_sampler=eval_sampler, num_workers=2
         )
-        test_sampler = DistributedBatchSampler(
-            self.test_dataset,
-            batch_size=self.training_args.batch_size * 32,
-            shuffle=False,
-            drop_last=False,
-        )
-        self.test_dataloader = DataLoader(
+        self.test_dataloader = io.DataLoader(
             self.test_dataset, batch_sampler=test_sampler, num_workers=2
         )
 
@@ -232,7 +192,7 @@ class Trainer:
         while (
             epoch < self.training_args.train_epochs + self.training_args.finetune_epochs
         ):
-            # finetune => load best trainging model
+            # finetune => load best training model
             if epoch == self.training_args.train_epochs:
                 self._init_finetune()
                 self.compute_test_loss()
@@ -258,22 +218,10 @@ class Trainer:
                 best_epoch = epoch
                 self.logger.info(f"best_epoch: {best_epoch}")
                 self.logger.info(f"eval_loss: {eval_loss}")
-                # self.compute_test_loss()
-                # save parameters
-                # params_filename = os.path.join(self.save_path, f"epoch_{epoch}.params")
                 params_filename = os.path.join(self.save_path, "epoch_best.params")
                 paddle.save(self.net.state_dict(), params_filename)
                 self.logger.info(f"save parameters to file: {params_filename}")
-
-            self.early_stopping(val_loss=eval_loss)
-            if self.early_stopping.early_stop:
-                self.logger.info("Early stopping")
-                if epoch < self.training_args.train_epochs:
-                    epoch = self.training_args.train_epochs
-                else:
-                    break
-            else:
-                epoch += 1
+            epoch += 1
 
         self.logger.info(f"best epoch: {best_epoch}")
         self.logger.info("apply the best val model on the test dataset ...")
@@ -286,16 +234,10 @@ class Trainer:
 
     def _init_finetune(self):
         self.logger.info("Start FineTune Training")
-        # params_filename = os.path.join(self.save_path, f"epoch_{best_epoch}.params")
         params_filename = os.path.join(self.save_path, "epoch_best.params")
         self.net.set_state_dict(paddle.load(params_filename))
         self.logger.info(f"load weight from: {params_filename}")
-
-        self.early_stopping.reset()
-
-        self.optimizer._learning_rate.max_lr = self.training_args.learning_rate * 0.1
-        self.optimizer._learning_rate.min_lr = self.training_args.learning_rate * 0.01
-
+        self.optimizer._learning_rate = self.training_args.learning_rate * 0.1
         self.finetune = True
 
     def train_one_step(self, src, tgt):
@@ -421,8 +363,13 @@ class Trainer:
 
             for i in range(prediction_length):
                 assert preds.shape[0] == trues.shape[0]
-                mae = mean_absolute_error(trues[:, :, i, 0], preds[:, :, i, 0])
-                rmse = mean_squared_error(trues[:, :, i, 0], preds[:, :, i, 0]) ** 0.5
+                mae = skmetrics.mean_absolute_error(
+                    trues[:, :, i, 0], preds[:, :, i, 0]
+                )
+                rmse = (
+                    skmetrics.mean_squared_error(trues[:, :, i, 0], preds[:, :, i, 0])
+                    ** 0.5
+                )
                 mape = masked_mape_np(trues[:, :, i, 0], preds[:, :, i, 0], 0)
                 self.logger.info(f"{i} MAE: {mae}")
                 self.logger.info(f"{i} RMSE: {rmse}")
@@ -430,8 +377,13 @@ class Trainer:
                 excel_list.extend([mae, rmse, mape])
 
             # print overall results
-            mae = mean_absolute_error(trues.reshape(-1, 1), preds.reshape(-1, 1))
-            rmse = mean_squared_error(trues.reshape(-1, 1), preds.reshape(-1, 1)) ** 0.5
+            mae = skmetrics.mean_absolute_error(
+                trues.reshape(-1, 1), preds.reshape(-1, 1)
+            )
+            rmse = (
+                skmetrics.mean_squared_error(trues.reshape(-1, 1), preds.reshape(-1, 1))
+                ** 0.5
+            )
             mape = masked_mape_np(trues.reshape(-1, 1), preds.reshape(-1, 1), 0)
             self.logger.info(f"all MAE: {mae}")
             self.logger.info(f"all RMSE: {rmse}")
