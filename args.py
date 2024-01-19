@@ -4,7 +4,10 @@ parser = argparse.ArgumentParser(description="Traffic Flow Forecasting")
 
 # data config
 parser.add_argument("--dataset_name", type=str, default="PEMS", help="dataset name")
-parser.add_argument("--data_path", type=str, default="data/flow.npz")
+parser.add_argument("--train_data_path", type=str, default="data/train.npz")
+parser.add_argument("--val_data_path", type=str, default="data/val.npz")
+parser.add_argument("--test_data_path", type=str, default="data/test.npz")
+parser.add_argument("--scaler_data_path", type=str, default="data/scaler.pkl")
 parser.add_argument("--node_path", type=str, default="data/pems_stations.csv")
 parser.add_argument("--adj_path", type=str, default="data/adj.csv")
 parser.add_argument("--split", type=str, default="6:2:2", help="data split")
