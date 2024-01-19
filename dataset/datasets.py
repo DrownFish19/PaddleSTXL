@@ -4,7 +4,7 @@ import pickle
 import numpy as np
 import paddle.io as io
 
-from dataset.data_utils import ScalerMinMax
+from dataset.data_utils import ScalerStd
 
 
 class TrafficFlowDataset(io.Dataset):
@@ -38,9 +38,10 @@ class TrafficFlowDataset(io.Dataset):
         if training_args.scale:
             # scale the input data
             if os.path.exists(self.training_args.scaler_data_path):
-                self.scaler = pickle.load(self.training_args.scaler_data_path)
+                with open(self.training_args.scaler_data_path, "rb") as f:
+                    self.scaler = pickle.load(f)
             else:
-                self.scaler = ScalerMinMax()
+                self.scaler = ScalerStd()
                 if data_type == "train":
                     train_data = origin_data
                 else:
