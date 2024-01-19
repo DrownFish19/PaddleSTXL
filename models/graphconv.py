@@ -158,7 +158,14 @@ class SpatialGraphNeuralNetwork(nn.Layer):
 
         # [B,T,E,D*2]
         edge_feat = paddle.concat([src_feat, dst_feat], axis=-1)
+
+        # 计算edge特征的相似度
+        # [B,N,E,1,D] * [B,N,E,D,1] => [B,N,E,1]
+        edge_attention = paddle.matmul(
+            edge_feat.unsqueeze(-2), edge_feat.unsqueeze(-1)
+        ).squeeze(-1)
         edge_feats_out = self.edge_layer(edge_feat)  # [B,T,E,D]
+        edge_feats_out = edge_attention * edge_feats_out
         B, T, E, D = edge_feats_out.shape
 
         # [B,T,E,D] -> [E,B,T,D]
