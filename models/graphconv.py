@@ -126,15 +126,18 @@ class SpatialGraphMLP(nn.Layer):
 
 
 class SpatialGraphNeuralNetwork(nn.Layer):
-    def __init__(self, config, graph: GraphST):
+    def __init__(self, args, graph: GraphST):
         super().__init__()
-        self.config = config
-        self.edge_in_dim = config.d_model * 2
-        self.edge_out_dim = config.d_model
-        self.node_in_dim = config.d_model * 2
-        self.node_out_dim = config.d_model
+        self.args = args
+        self.edge_in_dim = args.d_model * 2
+        self.edge_out_dim = args.d_model
+        self.node_in_dim = args.d_model * 2
+        self.node_out_dim = args.d_model
 
         self.graph = graph
+        self.node_nums = self.graph.node_nums
+        self.edge_src_idx = paddle.to_tensor(self.graph.edge_src_idx)
+        self.edge_dst_idx = paddle.to_tensor(self.graph.edge_dst_idx)
 
         self.edge_layer = SpatialGraphMLP(self.edge_in_dim, self.edge_out_dim)
         self.node_layer = SpatialGraphMLP(self.node_in_dim, self.node_out_dim)
@@ -149,37 +152,39 @@ class SpatialGraphNeuralNetwork(nn.Layer):
             _type_: _description_
         """
         # 更新edge特征
-        # 【B,T,N,D】
-        src_feat = paddle.gather(x, self.graph.edge_src_idx)
-        dst_feat = paddle.gather(x, self.graph.edge_dst_idx)
+        # [B,T,E,D]
+        src_feat = paddle.gather(x, self.edge_src_idx, axis=2)
+        dst_feat = paddle.gather(x, self.edge_dst_idx, axis=2)
 
-        edge_feat_src2dst = paddle.concat([src_feat, dst_feat], axis=-1)
-        edge_feat_dst2src = paddle.concat([dst_feat, src_feat], axis=-1)
-        edge_feats_out_src2dst = self.edge_layer(edge_feat_src2dst)
-        edge_feats_out_dst2src = self.edge_layer(edge_feat_dst2src)
+        # [B,T,E,D*2]
+        edge_feat = paddle.concat([src_feat, dst_feat], axis=-1)
+        edge_feats_out = self.edge_layer(edge_feat)  # [B,T,E,D]
+        B, T, E, D = edge_feats_out.shape
 
-        B, T, N, D = edge_feats_out_src2dst.shape
+        # [B,T,E,D] -> [E,B,T,D]
+        edge_feats_out = edge_feats_out.transpose([2, 0, 1, 3])
         # 更新node特征
-        edge_feats_scatter = paddle.zeros([N, B, T, D])
-        # TODO: add shape convert
+        edge_feats_scatter_src = paddle.zeros([self.node_nums, B, T, D])
+        edge_feats_scatter_dst = paddle.zeros([self.node_nums, B, T, D])
         node_feats_concat = paddle.concat(
             [
                 paddle.scatter(
-                    edge_feats_scatter,
-                    self.graph.edge_src_idx,
-                    edge_feats_out_dst2src,
+                    edge_feats_scatter_src,
+                    self.edge_src_idx,
+                    edge_feats_out,
                     overwrite=False,
                 ),
                 paddle.scatter(
-                    edge_feats_scatter,
-                    self.graph.edge_dst_idx,
-                    edge_feats_out_src2dst,
+                    edge_feats_scatter_dst,
+                    self.edge_dst_idx,
+                    edge_feats_out,
                     overwrite=False,
                 ),
             ],
             axis=-1,
         )
-        node_feats_out = self.node_layer(node_feats_concat)
+        node_feats_out = self.node_layer(node_feats_concat)  # [N,B,T,D]
+        node_feats_out = node_feats_out.transpose([1, 2, 0, 3])
 
         return x + node_feats_out
 

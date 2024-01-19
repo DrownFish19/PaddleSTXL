@@ -17,9 +17,9 @@ class TrafficFlowDataset(io.Dataset):
         self.training_args = training_args
         # step 1: load data
         # [T, N, D]
-        origin_data = np.load(training_args.data_path)["data"]
+        origin_data = np.load(training_args.data_path)["data"].astype(np.float32)
         self.data_mask = origin_data[:, :, :1]
-        self.data_input = origin_data[:, :, 1:]
+        self.data_input = origin_data[:, :, 1:2]
         self.seq_len, self.num_nodes, self.dims = self.data_input.shape
 
         # step 2: compute data ratio

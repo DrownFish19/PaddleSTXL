@@ -1,10 +1,12 @@
+import math
+
 import paddle
 import paddle.nn as nn
 
 
 class SpatialPositionalEmbedding(nn.Layer):
     def __init__(self, args):
-        super(SpatialPositionalEmbedding, self).__init__()
+        super().__init__()
         self.dropout = nn.Dropout(p=args.dropout)
         self.embedding = paddle.nn.Embedding(args.num_nodes, args.d_model)
 
@@ -20,18 +22,18 @@ class SpatialPositionalEmbedding(nn.Layer):
 
 
 class TemporalPositionalEmbedding(nn.Layer):
-    def __init__(self, args, max_len):
-        super(TemporalPositionalEmbedding, self).__init__()
+    def __init__(self, args):
+        super().__init__()
         self.args = args
         self.dropout = nn.Dropout(p=args.dropout)
-        self.max_len = max_len
+        self.max_len = max(args.his_len, args.tgt_len)
         self.d_model = args.d_model
         # computing the positional encodings once in log space
-        pe = paddle.zeros([max_len, self.d_model])
-        for pos in range(max_len):
+        pe = paddle.zeros([self.max_len, self.d_model])
+        for pos in range(self.max_len):
             for i in range(0, self.d_model, 2):
-                pe[pos, i] = paddle.sin(pos / (10000 ** ((2 * i) / self.d_model)))
-                pe[pos, i + 1] = paddle.cos(
+                pe[pos, i] = math.sin(pos / (10000 ** ((2 * i) / self.d_model)))
+                pe[pos, i + 1] = math.cos(
                     pos / (10000 ** ((2 * (i + 1)) / self.d_model))
                 )
 
@@ -52,7 +54,7 @@ class TemporalPositionalEmbedding(nn.Layer):
 
 class TrafficFlowEmbedding(nn.Layer):
     def __init__(self, args):
-        super(TrafficFlowEmbedding).__init__()
+        super().__init__()
         self.args = args
 
         self.dense = nn.Sequential(

@@ -126,10 +126,10 @@ class MultiHeadAttentionAwareTemporalContext(nn.Layer):
         value = self.value_conv(value)  # B, T, N, D
 
         if self.query_conv_type == "causal":
-            query = query[:, :, : -self.padding_causal, :]
+            query = query[:, : -self.padding_causal, :, :]
         if self.key_conv_type == "causal":
-            key = key[:, :, : -self.padding_causal, :]
-            value = value[:, :, : -self.padding_causal, :]
+            key = key[:, : -self.padding_causal, :, :]
+            value = value[:, : -self.padding_causal, :, :]
 
         # convert [B,T,N,D] to [B,T,N,H,D] to [B,N,H,T,D]
         multi_head_shape = [B, -1, N, self.heads, self.head_dim]

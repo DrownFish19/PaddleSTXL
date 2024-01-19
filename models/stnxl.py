@@ -1,10 +1,11 @@
 from copy import deepcopy
 
 import paddle.nn as nn
-from attention import MultiHeadAttentionAwareTemporalContext
-from embedding import TrafficFlowEmbedding
-from endecoder import Decoder, DecoderLayer, Encoder, EncoderLayer
-from graphconv import SpatialGraphNeuralNetwork
+
+from .attention import MultiHeadAttentionAwareTemporalContext
+from .embedding import TrafficFlowEmbedding
+from .endecoder import Decoder, DecoderLayer, Encoder, EncoderLayer
+from .graphconv import SpatialGraphNeuralNetwork
 
 
 class STNXL(nn.Layer):
