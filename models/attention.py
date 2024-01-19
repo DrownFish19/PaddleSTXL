@@ -33,13 +33,7 @@ class VanillaAttention(nn.Layer):
 
 
 class MultiHeadAttentionAwareTemporalContext(nn.Layer):
-    def __init__(
-        self,
-        args,
-        adj_matrix,
-        query_conv_type="1DConv",
-        key_conv_type="1DConv",
-    ):
+    def __init__(self, args, query_conv_type="1DConv", key_conv_type="1DConv"):
         """
         input shape: [B,T,N,D]
         """
