@@ -12,7 +12,6 @@ import sklearn.metrics as skmetrics
 import tqdm
 import visualdl
 
-from args import args
 from dataset import TrafficFlowDataset
 from models import STNXL, GraphST
 from utils import Logger, masked_mape_np
@@ -328,9 +327,3 @@ class Trainer:
         self.logger.info(f"load weight from: {params_filename}")
         self.net.set_state_dict(paddle.load(params_filename))
         self.compute_test_loss()
-
-
-if __name__ == "__main__":
-    trainer = Trainer(training_args=args)
-    trainer.train()
-    trainer.run_test()

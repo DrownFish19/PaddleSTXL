@@ -1,15 +1,7 @@
-import paddle
-from hssinfo import cluster
-
 from args import args
-from models.graphconv import GraphST
+from trainer import Trainer
 
 if __name__ == "__main__":
-    graph = GraphST(args=args, build=False)
-    res = cluster(
-        paddle.arange(graph.node_nums),
-        paddle.to_tensor(graph.edge_dst_idx, dtype=paddle.int32),
-        paddle.to_tensor(graph.edge_src_idx, dtype=paddle.int32),
-        paddle.to_tensor(graph.edge_weights, dtype=paddle.float32),
-    )
-    print(res.numpy())
+    stxl_trainer = Trainer(training_args=args)
+    stxl_trainer.train()
+    stxl_trainer.run_test()
