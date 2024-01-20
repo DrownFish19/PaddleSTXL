@@ -128,6 +128,9 @@ class Trainer:
             weight_decay=self.training_args.weight_decay,
             multi_precision=True,
         )
+        if self.training_args.continue_training:
+            optim_params_filename = os.path.join(self.save_path, "epoch_best.pdopt")
+            self.optimizer.set_state_dict(paddle.load(optim_params_filename))
 
         self.logger.info("Optimizer's state_dict:")
         for var_name in self.optimizer.state_dict():
@@ -165,7 +168,11 @@ class Trainer:
                     self.logger.info(f"best_epoch: {best_epoch}")
                     self.logger.info(f"eval_loss: {eval_loss}")
                     params_filename = os.path.join(self.save_path, "epoch_best.params")
+                    optim_params_filename = os.path.join(
+                        self.save_path, "epoch_best.pdopt"
+                    )
                     paddle.save(self.net.state_dict(), params_filename)
+                    paddle.save(self.optimizer.state_dict(), optim_params_filename)
                     self.logger.info(f"save parameters to file: {params_filename}")
 
         self.logger.info(f"best epoch: {best_epoch}")
@@ -246,6 +253,7 @@ class Trainer:
         return decoder_output, loss
 
     def compute_eval_loss(self):
+        self.logger.info("start to compute eval loss ...")
         with paddle.no_grad():
             all_eval_loss = []  # 记录了所有batch的loss
             start_time = time()
@@ -262,6 +270,7 @@ class Trainer:
         return eval_loss
 
     def compute_test_loss(self):
+        self.logger.info("start to compute test loss ...")
         with paddle.no_grad():
             preds = []
             tgts = []
