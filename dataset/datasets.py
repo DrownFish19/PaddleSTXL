@@ -1,7 +1,10 @@
+import os
+import pickle
+
 import numpy as np
 import paddle.io as io
 
-from dataset.data_utils import ScalerMinMax
+from dataset.data_utils import ScalerStd
 
 
 class TrafficFlowDataset(io.Dataset):
@@ -12,56 +15,45 @@ class TrafficFlowDataset(io.Dataset):
                         and 6 days for testing
     """
 
-    def __init__(self, training_args, data_type="train", scaler=None):
+    def __init__(self, training_args, data_type="train"):
         super().__init__()
         self.training_args = training_args
+
         # step 1: load data
         # [T, N, D]
-        origin_data = np.load(training_args.data_path)["data"]
+        if data_type == "train":
+            self.data_path = training_args.train_data_path
+        elif data_type == "val":
+            self.data_path = training_args.val_data_path
+        elif data_type == "test":
+            self.data_path = training_args.test_data_path
+
+        origin_data = np.load(self.data_path)["data"].astype(np.float32)
         self.data_mask = origin_data[:, :, :1]
-        self.data_input = origin_data[:, :, 1:]
+        self.data_input = origin_data[:, :, 1:2]
         self.seq_len, self.num_nodes, self.dims = self.data_input.shape
-
-        # step 2: compute data ratio
-        self.train_ratio, self.val_ratio, self.test_ratio = map(
-            int, training_args.split.split(":")
-        )
-        sum_ratio = self.train_ratio + self.val_ratio + self.test_ratio
-        self.train_ratio /= sum_ratio
-        self.val_ratio /= sum_ratio
-        self.test_ratio /= sum_ratio
-
-        self.train_size = int(self.seq_len * self.train_ratio)
-        self.val_size = int(self.seq_len * self.val_ratio)
-        self.test_size = int(self.seq_len * self.test_ratio)
         self.data_type = data_type
 
         # step 3: scale data
         if training_args.scale:
             # scale the input data
-            if scaler is None:
-                self.scaler = ScalerMinMax()
-                train_data = self.data_input[: self.train_size, :, :]
-                self.scaler.fit(train_data.reshape(-1, self.dims))
+            if os.path.exists(self.training_args.scaler_data_path):
+                with open(self.training_args.scaler_data_path, "rb") as f:
+                    self.scaler = pickle.load(f)
             else:
-                self.scaler = scaler
+                self.scaler = ScalerStd()
+                if data_type == "train":
+                    train_data = origin_data
+                else:
+                    train_data = np.load(self.training_args.train_data_path)["data"]
+                    train_data = train_data.astype(np.float32)
+                self.scaler.fit(train_data[:, :, 1:2].reshape(-1, self.dims))
+                with open(self.training_args.scaler_data_path, "wb") as f:
+                    pickle.dump(self.scaler, f)
+
             self.data_input = self.scaler.transform(self.data_input).reshape(
                 self.seq_len, self.num_nodes, self.dims
             )
-
-        # step 4: split data
-        train_start, train_end = 0, self.train_size
-        val_start, val_end = train_end, train_end + self.val_size
-        test_start, test_end = val_end, min(val_end + self.test_size, self.seq_len)
-        if self.data_type == "train":
-            self.data_input = self.data_input[train_start:train_end]
-            self.data_mask = self.data_mask[train_start:train_end]
-        elif self.data_type == "val":
-            self.data_input = self.data_input[val_start:val_end]
-            self.data_mask = self.data_mask[val_start:val_end]
-        elif self.data_type == "test":
-            self.data_input = self.data_input[test_start:test_end]
-            self.data_mask = self.data_mask[test_start:test_end]
 
     def __getitem__(self, index):
         his_begin = index
@@ -84,7 +76,7 @@ class TrafficFlowDataset(io.Dataset):
 
     def inverse_transform(self, data, axis=None):
         if self.training_args.scale:
-            return self.scaler.inverse_transform(data, axis)
+            return self.scaler.inverse_transform(data)
         else:
             return data
 
