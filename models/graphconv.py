@@ -1,6 +1,7 @@
 import hssinfo
 import numpy as np
 import paddle
+import paddle.distributed as dist
 import paddle.nn as nn
 import pandas as pd
 
@@ -70,6 +71,22 @@ class GraphST:
             for w in self.edge_weights
         ]
 
+    def get_cluster_group(self, node_nums, edge_src_idx, edge_dst_idx, edge_weights):
+        dist.init_parallel_env()
+        res = paddle.zeros([node_nums])
+        if paddle.distributed.get_rank() == 0:
+            res = hssinfo.cluster(
+                paddle.arange(node_nums),
+                paddle.to_tensor(edge_src_idx, dtype=paddle.int32),
+                paddle.to_tensor(edge_dst_idx, dtype=paddle.int32),
+                paddle.to_tensor(edge_weights, dtype=paddle.float32),
+            )
+            expected_place = paddle.framework._current_expected_place()
+            res = res._copy_to(expected_place, False)
+        dist.all_reduce(res, op=dist.ReduceOp.SUM)
+        res = res.numpy()
+        return res
+
     def build_group_graph(self, n):
         assert n >= 2, "group levels should be larger than or equal to 2"
         # 分组划分映射，二部图
@@ -81,12 +98,9 @@ class GraphST:
         self.group_connect_edge_dst_idx = {}
         self.group_connect_edge_weights = {}
 
-        res = hssinfo.cluster(
-            paddle.arange(self.node_nums),
-            paddle.to_tensor(self.edge_src_idx, dtype=paddle.int32),
-            paddle.to_tensor(self.edge_dst_idx, dtype=paddle.int32),
-            paddle.to_tensor(self.edge_weights, dtype=paddle.float32),
-        ).numpy()
+        res = self.get_cluster_group(
+            self.node_nums, self.edge_src_idx, self.edge_dst_idx, self.edge_weights
+        )
 
         self.group_mapping_edge_src_idx[1] = [idx for idx in range(self.node_nums)]
         self.group_mapping_edge_dst_idx[1] = list(res)
@@ -104,13 +118,9 @@ class GraphST:
 
         for i in range(2, n):
             last_group_nums = self.group_mapping_node_nums[i - 1][1]
-
-            res = hssinfo.cluster(
-                paddle.arange(last_group_nums),
-                paddle.to_tensor(conn_src, dtype=paddle.int32),
-                paddle.to_tensor(conn_dst, dtype=paddle.int32),
-                paddle.to_tensor(conn_weights, dtype=paddle.float32),
-            ).numpy()
+            res = self.get_cluster_group(
+                last_group_nums, conn_src, conn_dst, conn_weights
+            )
             if max(res) + 1 == last_group_nums:
                 # without re-grouping
                 break
