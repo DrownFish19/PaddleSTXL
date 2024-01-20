@@ -10,13 +10,12 @@ import paddle.nn as nn
 import paddle.optimizer as optimizer
 import sklearn.metrics as skmetrics
 import tqdm
+import visualdl
 
 from args import args
 from dataset import TrafficFlowDataset
 from models import STNXL, GraphST
 from utils import Logger, masked_mape_np
-
-# from hssinfo import cluster
 
 
 def amp_guard_context(fp16=False):
@@ -44,7 +43,10 @@ class Trainer:
             "experiments", training_args.dataset_name, self.folder_dir
         )
         os.makedirs(self.save_path, exist_ok=True)
-        self.logger = Logger("CorrSTN", os.path.join(self.save_path, "log.txt"))
+        self.logger = Logger("PaddleSTXL", os.path.join(self.save_path, "log.txt"))
+        self.writer = visualdl.LogWriter(
+            logdir=os.path.join(self.save_path, "visualdl")
+        )
 
         if training_args.start_epoch == 0:
             self.logger.info(f"create params directory {self.save_path}")
@@ -154,6 +156,7 @@ class Trainer:
                 his, his_mask, tgt, tgt_mask = batch_data
                 _, training_loss = self.train_one_step(his, his_mask, tgt, tgt_mask)
                 # self.logger.info(f"training_loss: {training_loss.numpy()}")
+                self.writer.add_scalar("train/loss", training_loss, global_step)
                 epoch_step += 1
                 global_step += 1
             self.logger.info(f"learning_rate: {self.optimizer.get_lr()}")
@@ -162,6 +165,7 @@ class Trainer:
 
             if epoch % self.training_args.eval_interval_epochs == 0 and epoch > 0:
                 eval_loss = self.compute_eval_loss()
+                self.writer.add_scalar("eval/loss", eval_loss, epoch)
                 if eval_loss < best_eval_loss:
                     best_eval_loss = eval_loss
                     best_epoch = epoch
