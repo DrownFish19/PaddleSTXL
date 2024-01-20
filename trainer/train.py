@@ -13,7 +13,7 @@ import tqdm
 import visualdl
 
 from dataset import TrafficFlowDataset
-from models import STNXL, GraphST
+from models import STLSTM, STNXL
 from utils import Logger, masked_mape_np
 
 
@@ -87,14 +87,18 @@ class Trainer:
         )
 
     def _build_model(self):
-        self.graph = GraphST(args=self.training_args, build=False)
-        self.graph.build_group_graph(n=2)
+        # self.graph = GraphST(args=self.training_args, build=False)
+        # self.graph.build_group_graph(n=2)
 
         nn.initializer.set_global_initializer(
             nn.initializer.XavierUniform(), nn.initializer.XavierUniform()
         )
 
-        self.net = STNXL(self.training_args, graph=self.graph)
+        if self.training_args.model_name == "PaddleSTXL":
+            self.net = STNXL(self.training_args, graph=self.graph)
+        elif self.training_args.model_name == "PaddleSTLSTM":
+            self.net = STLSTM(self.training_args)
+
         if self.training_args.continue_training:
             params_filename = os.path.join(self.save_path, "epoch_best.params")
             self.net.set_state_dict(paddle.load(params_filename))
@@ -232,27 +236,12 @@ class Trainer:
     def test_one_step(self, his, his_mask, tgt, tgt_mask):
         self.net.eval()
         with amp_guard_context(self.training_args.fp16):
-            decoder_start_inputs = his[:, -1:, :, :]
-            decoder_input_list = [decoder_start_inputs]
-
-            if not isinstance(self.net, paddle.DataParallel):
-                encoder_output = self.net.encode(his)
-            else:
-                encoder_output = self.net._layers.encode(his)
-
-            for _ in range(self.training_args.tgt_len):
-                decoder_inputs = paddle.concat(decoder_input_list, axis=1)
-                if not isinstance(self.net, paddle.DataParallel):
-                    decoder_output = self.net.decode(encoder_output, decoder_inputs)
-                else:
-                    decoder_output = self.net._layers.decode(
-                        encoder_output, decoder_inputs
-                    )
-                decoder_input_list = [decoder_start_inputs, decoder_output]
-
+            decoder_input = paddle.concat(
+                [his[:, -1:, :, :], tgt[:, :-1, :, :]], axis=1
+            )
+            decoder_output = self.net(src=his, tgt=decoder_input)
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
-
         return decoder_output, loss
 
     def compute_eval_loss(self):
