@@ -87,12 +87,7 @@ class Trainer:
 
     def _build_model(self):
         self.graph = GraphST(args=self.training_args, build=False)
-        # self.cluster = cluster(
-        #     paddle.arange(self.graph.node_nums),
-        #     paddle.to_tensor(self.graph.edge_dst_idx, dtype=paddle.int32),
-        #     paddle.to_tensor(self.graph.edge_src_idx, dtype=paddle.int32),
-        #     paddle.to_tensor(self.graph.edge_weights, dtype=paddle.float32),
-        # )
+        self.graph.build_group_graph(n=2)
 
         nn.initializer.set_global_initializer(
             nn.initializer.XavierUniform(), nn.initializer.XavierUniform()

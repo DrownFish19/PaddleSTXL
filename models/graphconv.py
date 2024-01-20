@@ -1,22 +1,10 @@
-import math
-
+import hssinfo
 import numpy as np
 import paddle
 import paddle.nn as nn
-import paddle.nn.functional as F
 import pandas as pd
-from geopy.distance import geodesic
 
 from dataset.data_utils import haversine
-
-
-def get_distance(row_i, row_j):
-    dis = geodesic(
-        (row_i["lat"], row_i["lon"]),
-        (row_j["lat"], row_j["lon"]),
-    ).kilometers
-
-    return row_i["ID"], row_j["ID"], dis
 
 
 class GraphST:
@@ -82,6 +70,95 @@ class GraphST:
             for w in self.edge_weights
         ]
 
+    def build_group_graph(self, n):
+        assert n >= 2, "group levels should be larger than or equal to 2"
+        # 分组划分映射，二部图
+        self.group_mapping_node_nums = {}
+        self.group_mapping_edge_src_idx = {i: [] for i in range(n)}
+        self.group_mapping_edge_dst_idx = {i: [] for i in range(n)}
+
+        self.group_connect_edge_src_idx = {}
+        self.group_connect_edge_dst_idx = {}
+        self.group_connect_edge_weights = {}
+
+        res = hssinfo.cluster(
+            paddle.arange(self.node_nums),
+            paddle.to_tensor(self.edge_src_idx, dtype=paddle.int32),
+            paddle.to_tensor(self.edge_dst_idx, dtype=paddle.int32),
+            paddle.to_tensor(self.edge_weights, dtype=paddle.float32),
+        ).numpy()
+
+        self.group_mapping_edge_src_idx[1] = [idx for idx in range(self.node_nums)]
+        self.group_mapping_edge_dst_idx[1] = list(res)
+        self.group_mapping_node_nums[1] = (self.node_nums, max(res) + 1)
+
+        conn_src, conn_dst, conn_weights = self._build_group_edge(
+            res,
+            edge_src_idx=self.edge_src_idx,
+            edge_dst_idx=self.edge_dst_idx,
+            edge_weights=self.edge_weights,
+        )
+        self.group_connect_edge_src_idx[1] = conn_src
+        self.group_connect_edge_dst_idx[1] = conn_dst
+        self.group_connect_edge_weights[1] = conn_weights
+
+        for i in range(2, n):
+            last_group_nums = self.group_mapping_node_nums[i - 1][1]
+
+            res = hssinfo.cluster(
+                paddle.arange(last_group_nums),
+                paddle.to_tensor(conn_src, dtype=paddle.int32),
+                paddle.to_tensor(conn_dst, dtype=paddle.int32),
+                paddle.to_tensor(conn_weights, dtype=paddle.float32),
+            ).numpy()
+            if max(res) + 1 == last_group_nums:
+                # without re-grouping
+                break
+
+            self.group_mapping_edge_src_idx[i] = [idx for idx in range(last_group_nums)]
+            self.group_mapping_edge_dst_idx[i] = list(res)
+            self.group_mapping_node_nums[i] = (last_group_nums, max(res) + 1)
+
+            conn_src, conn_dst, conn_weights = self._build_group_edge(
+                res,
+                edge_src_idx=conn_src,
+                edge_dst_idx=conn_dst,
+                edge_weights=conn_weights,
+            )
+            self.group_connect_edge_src_idx[i] = conn_src
+            self.group_connect_edge_dst_idx[i] = conn_dst
+            self.group_connect_edge_weights[i] = conn_weights
+
+    def _build_group_edge(
+        self, res: np.ndarray, edge_src_idx, edge_dst_idx, edge_weights
+    ):
+        res_dict = {}  # id => group
+        weights_dict = {}
+        edges_dict = []
+        for i in range(len(res)):
+            res_dict[i] = res[i]
+
+        for edge_idx in range(len(edge_src_idx)):
+            src_idx, dst_idx = edge_src_idx[edge_idx], edge_dst_idx[edge_idx]
+            src_group, dst_group = res_dict[src_idx], res_dict[dst_idx]
+            if src_group != dst_group:
+                key = (src_group, dst_group)
+                if key not in edges_dict:
+                    edges_dict.append(key)
+                    weights_dict[key] = edge_weights[edge_idx]
+                else:
+                    weights_dict[key] += edge_weights[edge_idx]
+
+        connect_edge_src_idx = []
+        connect_edge_dst_idx = []
+        connect_edge_weights = []
+        for key in weights_dict:
+            src_group, dst_group = key
+            connect_edge_src_idx.append(src_group)
+            connect_edge_dst_idx.append(dst_group)
+            connect_edge_weights.append(weights_dict[key])
+        return connect_edge_src_idx, connect_edge_dst_idx, connect_edge_weights
+
     def load_graph(self):
         dataframe = pd.read_csv(self.args.adj_path)
         self.edge_src_idx = dataframe["src"].values.tolist()
@@ -136,11 +213,27 @@ class SpatialGraphNeuralNetwork(nn.Layer):
 
         self.graph = graph
         self.node_nums = self.graph.node_nums
+        self.group_nums = self.graph.group_mapping_node_nums[1][1]
         self.edge_src_idx = paddle.to_tensor(self.graph.edge_src_idx)
         self.edge_dst_idx = paddle.to_tensor(self.graph.edge_dst_idx)
+        self.down_sampling_edge_dst_idx = paddle.to_tensor(
+            self.graph.group_mapping_edge_dst_idx[1]
+        )
+        self.group_connect_edge_src_idx = paddle.to_tensor(
+            self.graph.group_connect_edge_src_idx[1]
+        )
+        self.group_connect_edge_dst_idx = paddle.to_tensor(
+            self.graph.group_connect_edge_dst_idx[1]
+        )
+        self.up_sampling_edge_dst_idx = paddle.to_tensor(
+            self.graph.group_mapping_edge_dst_idx[1]
+        )
 
         self.edge_layer = SpatialGraphMLP(self.edge_in_dim, self.edge_out_dim)
         self.node_layer = SpatialGraphMLP(self.node_in_dim, self.node_out_dim)
+        self.node2group_layer = SpatialGraphMLP(self.node_out_dim, self.node_out_dim)
+        self.group2node_layer = SpatialGraphMLP(self.node_out_dim, self.node_out_dim)
+        self.group_layer = SpatialGraphMLP(self.node_in_dim, self.node_out_dim)
 
     def forward(self, x):
         """_summary_
@@ -151,26 +244,24 @@ class SpatialGraphNeuralNetwork(nn.Layer):
         Returns:
             _type_: _description_
         """
-        # 更新edge特征
-        # [B,T,E,D]
-        src_feat = paddle.gather(x, self.edge_src_idx, axis=2)
-        dst_feat = paddle.gather(x, self.edge_dst_idx, axis=2)
+        # 1. 更新edge特征
+        src_feat = paddle.gather(x, self.edge_src_idx, axis=2)  # [B,T,E,D]
+        dst_feat = paddle.gather(x, self.edge_dst_idx, axis=2)  # [B,T,E,D]
+        edge_feat = paddle.concat([src_feat, dst_feat], axis=-1)  # [B,T,E,D*2]
 
-        # [B,T,E,D*2]
-        edge_feat = paddle.concat([src_feat, dst_feat], axis=-1)
-
-        # 计算edge特征的相似度
+        # 2. 计算edge特征的相似度
         # [B,N,E,1,D] * [B,N,E,D,1] => [B,N,E,1]
-        edge_attention = paddle.matmul(
-            edge_feat.unsqueeze(-2), edge_feat.unsqueeze(-1)
-        ).squeeze(-1)
+        edge_attention = paddle.matmul(edge_feat.unsqueeze(-2), edge_feat.unsqueeze(-1))
+        edge_attention = edge_attention.squeeze(-1)
         edge_feats_out = self.edge_layer(edge_feat)  # [B,T,E,D]
         edge_feats_out = edge_attention * edge_feats_out
+
+        # 3. 更新node特征
         B, T, E, D = edge_feats_out.shape
 
         # [B,T,E,D] -> [E,B,T,D]
         edge_feats_out = edge_feats_out.transpose([2, 0, 1, 3])
-        # 更新node特征
+        # 3.1. 节点间的edge特征聚合
         edge_feats_scatter_src = paddle.zeros([self.node_nums, B, T, D])
         edge_feats_scatter_dst = paddle.zeros([self.node_nums, B, T, D])
         node_feats_concat = paddle.concat(
@@ -189,31 +280,57 @@ class SpatialGraphNeuralNetwork(nn.Layer):
                 ),
             ],
             axis=-1,
-        )
+        )  # [N,B,T,D*2]
         node_feats_out = self.node_layer(node_feats_concat)  # [N,B,T,D]
+
+        # 3.2. 节点-组的edge特征聚合
+        down_sampling_node_feats = paddle.zeros([self.group_nums, B, T, D])
+        down_sampling_node_feats = paddle.scatter(
+            down_sampling_node_feats,
+            self.down_sampling_edge_dst_idx,
+            node_feats_out,
+            overwrite=False,
+        )  # [G,B,T,D]
+        down_sampling_node_feats = self.node2group_layer(down_sampling_node_feats)
+
+        # 3.3. 组间的edge特征聚合
+        group_connect_node_feats_src = paddle.zeros([self.group_nums, B, T, D])
+        group_connect_node_feats_dst = paddle.zeros([self.group_nums, B, T, D])
+        group_connect_node_feats = paddle.concat(
+            [
+                paddle.scatter(
+                    group_connect_node_feats_src,
+                    self.group_connect_edge_src_idx,
+                    paddle.gather(
+                        down_sampling_node_feats,
+                        self.group_connect_edge_dst_idx,
+                        axis=0,
+                    ),
+                    overwrite=False,
+                ),
+                paddle.scatter(
+                    group_connect_node_feats_dst,
+                    self.group_connect_edge_dst_idx,
+                    paddle.gather(
+                        down_sampling_node_feats,
+                        self.group_connect_edge_src_idx,
+                        axis=0,
+                    ),
+                    overwrite=False,
+                ),
+            ],
+            axis=-1,
+        )  # [G,B,T,D*2]
+        # [G,B,T,D]
+        group_connect_node_feats = self.group_layer(group_connect_node_feats)
+
+        # 3.4. 组-节点的edge特征聚合
+        # [N,B,T,D]
+        up_sampling_node_feats = paddle.gather(
+            group_connect_node_feats, self.up_sampling_edge_dst_idx, axis=0
+        )
+        up_sampling_node_feats = self.group2node_layer(up_sampling_node_feats)
+
         node_feats_out = node_feats_out.transpose([1, 2, 0, 3])
-
-        return x + node_feats_out
-
-
-class SpatialAttentionLayer(nn.Layer):
-    """
-    compute spatial attention scores
-    """
-
-    def __init__(self, dropout=0.0):
-        super(SpatialAttentionLayer, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-    def forward(self, x):
-        """
-        :param x: (B, T, E, D)
-        :return: (B, T, N, N)
-        """
-        B, T, E, D = x.shape
-
-        x = x.transpose([0, 2, 1, 3])  # [B,T,N,F_in]
-        # [B,T,N,F_in][B,T,F_in,N]=[B*T,N,N]
-        score = paddle.matmul(x, x, transpose_y=True) / math.sqrt(D)
-        score = self.dropout(F.softmax(score, axis=-1))  # [B,T,N,N]
-        return score
+        up_sampling_node_feats = up_sampling_node_feats.transpose([1, 2, 0, 3])
+        return x + node_feats_out + up_sampling_node_feats
