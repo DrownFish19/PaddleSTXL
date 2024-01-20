@@ -76,7 +76,7 @@ class TrafficFlowDataset(io.Dataset):
 
     def inverse_transform(self, data, axis=None):
         if self.training_args.scale:
-            return self.scaler.inverse_transform(data, axis)
+            return self.scaler.inverse_transform(data)
         else:
             return data
 
