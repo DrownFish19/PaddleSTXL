@@ -199,7 +199,13 @@ class Trainer:
         """
         self.net.train()
         with amp_guard_context(self.training_args.fp16):
-            decoder_input = paddle.zeros_like(tgt)
+            decoder_input = paddle.concat(
+                [
+                    his[:, -1:, :, :],
+                    tgt[:, :-1, :, :],
+                ],
+                axis=1,
+            )
             decoder_output = self.net(src=his, tgt=decoder_input)
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
@@ -219,7 +225,13 @@ class Trainer:
     def eval_one_step(self, his, his_mask, tgt, tgt_mask):
         self.net.eval()
         with amp_guard_context(self.training_args.fp16):
-            decoder_input = paddle.zeros_like(tgt)
+            decoder_input = paddle.concat(
+                [
+                    his[:, -1:, :, :],
+                    tgt[:, :-1, :, :],
+                ],
+                axis=1,
+            )
             decoder_output = self.net(src=his, tgt=decoder_input)
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
@@ -228,7 +240,13 @@ class Trainer:
     def test_one_step(self, his, his_mask, tgt, tgt_mask):
         self.net.eval()
         with amp_guard_context(self.training_args.fp16):
-            decoder_input = paddle.zeros_like(tgt)
+            decoder_input = paddle.concat(
+                [
+                    his[:, -1:, :, :],
+                    tgt[:, :-1, :, :],
+                ],
+                axis=1,
+            )
             decoder_output = self.net(src=his, tgt=decoder_input)
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
