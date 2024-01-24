@@ -13,7 +13,7 @@ import tqdm
 import visualdl
 
 from dataset import TrafficFlowDataset
-from models import STNXL, GraphST
+from models import STLSTM, STNXL
 from utils import Logger, masked_mape_np
 
 
@@ -87,14 +87,18 @@ class Trainer:
         )
 
     def _build_model(self):
-        self.graph = GraphST(args=self.training_args, build=False)
-        self.graph.build_group_graph(n=2)
+        # self.graph = GraphST(args=self.training_args, build=False)
+        # self.graph.build_group_graph(n=2)
 
         nn.initializer.set_global_initializer(
             nn.initializer.XavierUniform(), nn.initializer.XavierUniform()
         )
 
-        self.net = STNXL(self.training_args, graph=self.graph)
+        if self.training_args.model_name == "PaddleSTXL":
+            self.net = STNXL(self.training_args, graph=self.graph)
+        elif self.training_args.model_name == "PaddleSTLSTM":
+            self.net = STLSTM(self.training_args)
+
         if self.training_args.continue_training:
             params_filename = os.path.join(self.save_path, "epoch_best.params")
             self.net.set_state_dict(paddle.load(params_filename))
@@ -232,7 +236,6 @@ class Trainer:
             decoder_output = self.net(src=his, tgt=decoder_input)
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
-
         return decoder_output, loss
 
     def compute_eval_loss(self):
