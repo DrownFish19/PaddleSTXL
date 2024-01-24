@@ -13,7 +13,7 @@ import tqdm
 import visualdl
 
 from dataset import TrafficFlowDataset
-from models import STLSTM, STNXL
+from models import STLSTM, STNXL, GraphST, STGCN
 from utils import Logger, masked_mape_np
 
 
@@ -42,7 +42,7 @@ class Trainer:
             "experiments", training_args.dataset_name, self.folder_dir
         )
         os.makedirs(self.save_path, exist_ok=True)
-        self.logger = Logger("PaddleSTXL", os.path.join(self.save_path, "log.txt"))
+        self.logger = Logger(f"{self.training_args.model_name}", os.path.join(self.save_path, "log.txt"))
         self.writer = visualdl.LogWriter(
             logdir=os.path.join(self.save_path, "visualdl")
         )
@@ -87,8 +87,12 @@ class Trainer:
         )
 
     def _build_model(self):
-        # self.graph = GraphST(args=self.training_args, build=False)
-        # self.graph.build_group_graph(n=2)
+        if os.path.exists(self.training_args.adj_path):
+            self.graph = GraphST(args=self.training_args, build=False)
+        else:
+            self.graph = GraphST(args=self.training_args, build=True)
+        if self.training_args.model_name == "PaddleSTXL":
+            self.graph.build_group_graph(n=2)
 
         nn.initializer.set_global_initializer(
             nn.initializer.XavierUniform(), nn.initializer.XavierUniform()
@@ -98,6 +102,8 @@ class Trainer:
             self.net = STNXL(self.training_args, graph=self.graph)
         elif self.training_args.model_name == "PaddleSTLSTM":
             self.net = STLSTM(self.training_args)
+        elif self.training_args.model_name == "PaddleSTGCN":
+            self.net = STGCN(self.training_args, graph=self.graph)
 
         if self.training_args.continue_training:
             params_filename = os.path.join(self.save_path, "epoch_best.params")

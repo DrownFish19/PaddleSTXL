@@ -4,9 +4,9 @@ parser = argparse.ArgumentParser(description="Traffic Flow Forecasting")
 
 # data config
 parser.add_argument("--dataset_name", type=str, default="PEMS", help="dataset name")
-parser.add_argument("--train_data_path", type=str, default="/root/stdata/train.npz")
-parser.add_argument("--val_data_path", type=str, default="/root/stdata/val.npz")
-parser.add_argument("--test_data_path", type=str, default="/root/stdata/test.npz")
+parser.add_argument("--train_data_path", type=str, default="data/debug.npz")
+parser.add_argument("--val_data_path", type=str, default="data/debug.npz")
+parser.add_argument("--test_data_path", type=str, default="data/debug.npz")
 parser.add_argument("--scaler_data_path", type=str, default="data/scaler.pkl")
 parser.add_argument("--node_path", type=str, default="data/pems_stations.csv")
 parser.add_argument("--adj_path", type=str, default="data/adj.csv")
@@ -17,7 +17,7 @@ parser.add_argument("--node_top_k", type=int, default=10)
 parser.add_argument("--node_max_dis", type=int, default=30)
 
 # model config
-parser.add_argument("--model_name", type=str, default="PaddleSTLSTM", help="model name")
+parser.add_argument("--model_name", type=str, default="PaddleSTGCN", help="model name")
 parser.add_argument("--his_len", type=int, default=12, help="history data length")
 parser.add_argument("--tgt_len", type=int, default=12, help="tgt data length")
 parser.add_argument("--input_size", type=int, default=1)

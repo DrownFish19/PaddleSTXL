@@ -40,6 +40,10 @@ class GraphST:
             self.save_graph()
         else:
             self.load_graph()
+        
+        self.build_laplacian_matrix()
+        T_k = self.build_chebyshev_polynomials(k=1)
+        self.chebyshev_matrix = T_k[-1]
 
     def build_graph(self):
         """build graph according to the node dataframe"""
@@ -76,10 +80,6 @@ class GraphST:
             (w - min_weight) * 0.9 / (max_weight - min_weight) + 0.1
             for w in self.edge_weights
         ]
-
-        self.build_laplacian_matrix()
-        T_k = self.build_chebyshev_polynomials(k=1)
-        self.chebyshev_matrix = T_k[-1]
 
     def build_laplacian_matrix(self):
         self.matrix_sparse = sparse.csc_matrix(
