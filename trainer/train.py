@@ -199,9 +199,7 @@ class Trainer:
         """
         self.net.train()
         with amp_guard_context(self.training_args.fp16):
-            decoder_input = paddle.concat(
-                [his[:, -1:, :, :], tgt[:, :-1, :, :]], axis=1
-            )
+            decoder_input = paddle.zeros_like(tgt)
             decoder_output = self.net(src=his, tgt=decoder_input)
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
@@ -221,9 +219,7 @@ class Trainer:
     def eval_one_step(self, his, his_mask, tgt, tgt_mask):
         self.net.eval()
         with amp_guard_context(self.training_args.fp16):
-            decoder_input = paddle.concat(
-                [his[:, -1:, :, :], tgt[:, :-1, :, :]], axis=1
-            )
+            decoder_input = paddle.zeros_like(tgt)
             decoder_output = self.net(src=his, tgt=decoder_input)
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
@@ -232,24 +228,8 @@ class Trainer:
     def test_one_step(self, his, his_mask, tgt, tgt_mask):
         self.net.eval()
         with amp_guard_context(self.training_args.fp16):
-            decoder_start_inputs = his[:, -1:, :, :]
-            decoder_input_list = [decoder_start_inputs]
-
-            if not isinstance(self.net, paddle.DataParallel):
-                encoder_output = self.net.encode(his)
-            else:
-                encoder_output = self.net._layers.encode(his)
-
-            for _ in range(self.training_args.tgt_len):
-                decoder_inputs = paddle.concat(decoder_input_list, axis=1)
-                if not isinstance(self.net, paddle.DataParallel):
-                    decoder_output = self.net.decode(encoder_output, decoder_inputs)
-                else:
-                    decoder_output = self.net._layers.decode(
-                        encoder_output, decoder_inputs
-                    )
-                decoder_input_list = [decoder_start_inputs, decoder_output]
-
+            decoder_input = paddle.zeros_like(tgt)
+            decoder_output = self.net(src=his, tgt=decoder_input)
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
 
