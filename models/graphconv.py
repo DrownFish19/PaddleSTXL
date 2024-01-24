@@ -40,10 +40,10 @@ class GraphST:
             self.save_graph()
         else:
             self.load_graph()
-        
+
         self.build_laplacian_matrix()
-        T_k = self.build_chebyshev_polynomials(k=1)
-        self.chebyshev_matrix = T_k[-1]
+        chebyshev_matrix = self.build_chebyshev_polynomials(k=1)
+        self.chebyshev_matrix = chebyshev_matrix[-1]
 
     def build_graph(self):
         """build graph according to the node dataframe"""
@@ -82,18 +82,26 @@ class GraphST:
         ]
 
     def build_laplacian_matrix(self):
+        # self.matrix_sparse = sparse.csc_matrix(
+        #     (self.edge_weights, (self.edge_src_idx, self.edge_dst_idx)),
+        #     shape=(self.node_nums, self.node_nums),
+        # )
         self.matrix_sparse = sparse.csc_matrix(
-            (self.edge_weights, (self.edge_src_idx, self.edge_dst_idx)),
+            (
+                np.ones_like(np.array(self.edge_weights)),
+                (self.edge_src_idx, self.edge_dst_idx),
+            ),
             shape=(self.node_nums, self.node_nums),
         )
         self.matrix_sparse = self.matrix_sparse + self.matrix_sparse.T  # 转换为无向图结构
         id = sparse.identity(self.node_nums, format="csc")
         self.matrix_sparse = self.matrix_sparse - id  # 相加过程中自权重翻倍，减去自权重
 
-        # A_{sym} = D^{-0.5} * A * D^{-0.5}
+        # A_{sym} = I - D^{-0.5} * A * D^{-0.5}
         row_sum = self.matrix_sparse.sum(axis=1).A1
         row_sum_inv_sqrt = np.power(row_sum, -0.5)
         row_sum_inv_sqrt[np.isinf(row_sum_inv_sqrt)] = 0.0
+        row_sum_inv_sqrt[np.isnan(row_sum_inv_sqrt)] = 0.0
         deg_inv_sqrt = sparse.diags(row_sum_inv_sqrt, format="csc")
         sym_norm_adj = deg_inv_sqrt.dot(self.matrix_sparse).dot(deg_inv_sqrt)
 
@@ -103,14 +111,13 @@ class GraphST:
         """Calculate Chebyshev polynomials up to order k. Return a list of sparse matrices (tuple representation)."""
         if getattr(self, "laplacian_matrix", None) is None:
             self.build_laplacian_matrix()
-        matrix = self.laplacian_matrix + sparse.identity(self.node_nums, format="csc")
-        largest_eigval, _ = linalg.eigsh(matrix, 1, which="LM")
+
+        degree_diags_matrix = sparse.identity(self.node_nums, format="csc")
+        max_eigen_val = linalg.norm(self.laplacian_matrix, 2)
 
         # Calculate Chebyshev polynomials
-        scaled_L = (2.0 / largest_eigval[0]) * matrix - sparse.identity(
-            self.node_nums, format="csc"
-        )
-        T_k = [sparse.identity(self.node_nums, format="csc"), scaled_L]
+        scaled_L = (2.0 / max_eigen_val) * self.laplacian_matrix - degree_diags_matrix
+        T_k = [degree_diags_matrix, scaled_L]
 
         for i in range(2, k + 1):
             T_k.append(2 * scaled_L * T_k[i - 1] - T_k[i - 2])

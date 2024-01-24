@@ -3,16 +3,34 @@ import paddle.nn as nn
 import paddle.nn.functional as F
 
 
-from utils import clones
-
-
 class STGCN(nn.Layer):
     def __init__(self, args, graph):
         super().__init__()
         self.args = args
         self.graph = graph
 
-        self.st_blocks = clones(STConvBlock(self.args, graph), self.args.decoder_num_layers)
+        st_blocks = []
+        for i in range(self.args.decoder_num_layers):
+            if i == 0:
+                st_blocks.append(
+                    STConvBlock(
+                        self.args,
+                        in_channels=args.input_size,
+                        out_channels=args.d_model,
+                        graph=graph,
+                    )
+                )
+            else:
+                st_blocks.append(
+                    STConvBlock(
+                        self.args,
+                        in_channels=args.d_model,
+                        out_channels=args.d_model,
+                        graph=graph,
+                    )
+                )
+
+        self.st_blocks = nn.Sequential(*st_blocks)
         self.output = OutputBlock(self.args)
 
     def forward(self, src, tgt):
@@ -27,7 +45,13 @@ class Align(nn.Layer):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.in_channels, self.out_channels = in_channels, out_channels
-        self.align_conv = nn.Conv2D(in_channels=in_channels, out_channels=out_channels, kernel_size=(1, 1), data_format="NHWC")
+        self.align_conv = nn.Conv2D(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=(1, 1),
+            bias_attr=True,
+            data_format="NHWC",
+        )
 
     def forward(self, x):
         """_summary_
@@ -42,7 +66,10 @@ class Align(nn.Layer):
             x = self.align_conv(x)
         elif self.in_channels < self.out_channels:
             B, T, N, D = x.shape
-            x = paddle.concat([x, paddle.zeros([B, T, N, self.out_channels - self.in_channels])], axis=-1)
+            x = paddle.concat(
+                [x, paddle.zeros([B, T, N, self.out_channels - self.in_channels])],
+                axis=-1,
+            )
         else:
             x = x
 
@@ -50,7 +77,6 @@ class Align(nn.Layer):
 
 
 class TemporalConvLayer(nn.Layer):
-
     # Temporal Convolution Layer (GLU)
     #
     #        |--------------------------------| * residual connection *
@@ -80,7 +106,7 @@ class TemporalConvLayer(nn.Layer):
 
     def forward(self, x):
         x_in = self.align(x)
-        x_causal_conv = self.causal_conv(x_in)[:, :-self.padding_causal, : , :]
+        x_causal_conv = self.causal_conv(x_in)[:, : -self.padding_causal, :, :]
         x = F.relu(x_causal_conv + x_in)
         return x
 
@@ -90,20 +116,26 @@ class ChebyshevGraphConv(nn.Layer):
         super().__init__()
         self.c_in = c_in
         self.c_out = c_out
-        self.chebyshev_matrix = chebyshev_matrix
-        self.weight = paddle.create_parameter(shape=[3, c_in, c_out], dtype=paddle.get_default_dtype())
-        self.bias = paddle.create_parameter(shape=[c_out], dtype=paddle.get_default_dtype())
+        self.chebyshev_matrix = paddle.to_tensor(
+            chebyshev_matrix.toarray(), dtype=paddle.get_default_dtype()
+        )
+        self.weight = paddle.create_parameter(
+            shape=[3, c_in, c_out], dtype=paddle.get_default_dtype()
+        )
+        self.bias = paddle.create_parameter(
+            shape=[c_out], dtype=paddle.get_default_dtype()
+        )
 
     def forward(self, x):
         # B, T, N, D = x.shape
 
         x_0 = x
-        x_1 = paddle.einsum('hn,btnd->bthd', self.chebyshev_matrix, x)
-        x_2 = paddle.einsum('hn,btnd->bthd', 2 * self.chebyshev_matrix, x_1) - x_0
+        x_1 = paddle.einsum("hn,btnd->bthd", self.chebyshev_matrix, x)
+        x_2 = paddle.einsum("hn,btnd->bthd", 2 * self.chebyshev_matrix, x_1) - x_0
 
-        x = paddle.stack([x_0, x_1, x_2], dim=3)
+        x = paddle.stack([x_0, x_1, x_2], axis=2)
 
-        chebyshev_graph_conv = paddle.einsum('btknd,kdj->btnj', x, self.weight)
+        chebyshev_graph_conv = paddle.einsum("btknd,kdj->btnj", x, self.weight)
         chebyshev_graph_conv = chebyshev_graph_conv + self.bias
         return chebyshev_graph_conv
 
@@ -113,16 +145,21 @@ class GraphConv(nn.Layer):
         super(GraphConv, self).__init__()
         self.c_in = c_in
         self.c_out = c_out
-        self.laplacian_matrix = laplacian_matrix
-
-        self.weight = paddle.create_parameter(shape=[c_in, c_out], dtype=paddle.get_default_dtype())
-        self.bias = paddle.create_parameter(shape=[c_out], dtype=paddle.get_default_dtype())
+        self.laplacian_matrix = paddle.to_tensor(
+            laplacian_matrix, dtype=paddle.get_default_dtype()
+        )
+        self.weight = paddle.create_parameter(
+            shape=[c_in, c_out], dtype=paddle.get_default_dtype()
+        )
+        self.bias = paddle.create_parameter(
+            shape=[c_out], dtype=paddle.get_default_dtype()
+        )
 
     def forward(self, x):
         # B, T, N, D = x.shape
 
-        x = paddle.einsum('hi,btij->bthj', self.gso, x)
-        graph_conv = paddle.einsum('bthi,ij->bthj', x, self.weight)
+        x = paddle.einsum("hi,btij->bthj", self.gso, x)
+        graph_conv = paddle.einsum("bthi,ij->bthj", x, self.weight)
         return graph_conv + self.bias
 
 
@@ -160,12 +197,12 @@ class STConvBlock(nn.Layer):
     # N: Layer Normolization
     # D: Dropout
 
-    def __init__(self, args, graph):
+    def __init__(self, args, in_channels, out_channels, graph):
         super(STConvBlock, self).__init__()
-        self.tmp_conv1 = TemporalConvLayer(args, args.input_size, args.d_model)
-        self.graph_conv = GraphConvLayer(args.d_model, args.d_model, graph)
-        self.tmp_conv2 = TemporalConvLayer(args, args.d_model, args.d_model)
-        self.tc2_ln = nn.LayerNorm(args.d_model)
+        self.tmp_conv1 = TemporalConvLayer(args, in_channels, out_channels)
+        self.graph_conv = GraphConvLayer(out_channels, out_channels, graph)
+        self.tmp_conv2 = TemporalConvLayer(args, out_channels, out_channels)
+        self.tc2_ln = nn.LayerNorm(out_channels)
         self.relu = nn.ReLU()
 
     def forward(self, x):
@@ -188,7 +225,9 @@ class OutputBlock(nn.Layer):
         super(OutputBlock, self).__init__()
         self.tmp_conv1 = TemporalConvLayer(args, args.d_model, args.d_model)
         self.fc1 = nn.Linear(in_features=args.d_model, out_features=args.d_model)
-        self.fc2 = nn.Linear(in_features=args.d_model, out_features=args.decoder_output_size)
+        self.fc2 = nn.Linear(
+            in_features=args.d_model, out_features=args.decoder_output_size
+        )
         self.tc1_ln = nn.LayerNorm(args.d_model)
         self.relu = nn.ReLU()
 
