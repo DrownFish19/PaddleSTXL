@@ -136,8 +136,9 @@ class GraphST:
             )
             expected_place = paddle.framework._current_expected_place()
             res = res._copy_to(expected_place, False)
-        dist.barrier()
-        dist.broadcast(res, src=0)
+        if paddle.distributed.get_world_size() > 1:
+            dist.barrier()
+            dist.broadcast(res, src=0)
         res = res.numpy()
         return res
 
