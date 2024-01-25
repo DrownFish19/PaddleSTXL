@@ -169,7 +169,7 @@ class GraphConvLayer(nn.Layer):
         self.c_in = c_in
         self.c_out = c_out
         self.align = Align(c_in, c_out)
-        self.graph_conv = ChebyshevGraphConv(c_out, c_out, graph.chebyshev_matrix)
+        self.graph_conv = ChebyshevGraphConv(c_out, c_out, graph.chebyshev_matrix[1])
         # self.graph_conv = GraphConv(c_out, c_out, graph.laplacian_matrix)
 
     def forward(self, x):
