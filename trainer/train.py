@@ -13,7 +13,7 @@ import tqdm
 import visualdl
 
 from dataset import TrafficFlowDataset
-from models import STGCN, STLSTM, STNXL, GraphST
+from models import ASTGCN, STGCN, STLSTM, STNXL, GraphST
 from utils import Logger, masked_mape_np
 
 
@@ -106,6 +106,8 @@ class Trainer:
             self.net = STLSTM(self.training_args)
         elif "PaddleSTGCN" in self.training_args.model_name:
             self.net = STGCN(self.training_args, graph=self.graph)
+        elif "PaddleASTGCN" in self.training_args.model_name:
+            self.net = ASTGCN(self.training_args, graph=self.graph)
 
         if self.training_args.continue_training:
             params_filename = os.path.join(self.save_path, "epoch_best.params")

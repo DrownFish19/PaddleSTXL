@@ -42,8 +42,7 @@ class GraphST:
             self.load_graph()
 
         self.build_laplacian_matrix()
-        chebyshev_matrix = self.build_chebyshev_polynomials(k=1)
-        self.chebyshev_matrix = chebyshev_matrix[-1]
+        self.chebyshev_matrix = self.build_chebyshev_polynomials(k=3)
 
     def build_graph(self):
         """build graph according to the node dataframe"""
