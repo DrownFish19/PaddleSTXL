@@ -12,8 +12,8 @@ import sklearn.metrics as skmetrics
 import tqdm
 import visualdl
 
-from dataset import TrafficFlowDataset
-from models import ASTGCN, STGCN, STLSTM, STNXL, GraphST
+from dataset import SpatialGraph, TrafficFlowDataset
+from models import ASTGCN, STGCN, STLSTM, STNXL
 from utils import Logger, masked_mape_np
 
 
@@ -90,9 +90,9 @@ class Trainer:
 
     def _build_model(self):
         if os.path.exists(self.training_args.adj_path):
-            self.graph = GraphST(args=self.training_args, build=False)
+            self.graph = SpatialGraph(args=self.training_args, build=False)
         else:
-            self.graph = GraphST(args=self.training_args, build=True)
+            self.graph = SpatialGraph(args=self.training_args, build=True)
         if "PaddleSTXL" in self.training_args.model_name:
             self.graph.build_group_graph(n=2)
 
