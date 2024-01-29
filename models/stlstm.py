@@ -1,6 +1,6 @@
 import paddle.nn as nn
 
-from .embedding import TrafficFlowEmbedding
+from models import TrafficFlowEmbedding
 
 
 class STLSTM(nn.Layer):
