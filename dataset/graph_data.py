@@ -187,7 +187,6 @@ class SpatialGraph:
         return T_k
 
     def get_cluster_group(self, node_nums, edge_src_idx, edge_dst_idx, edge_weights):
-        dist.init_parallel_env()
         res = paddle.zeros([node_nums], dtype=paddle.int32)
         if paddle.distributed.get_rank() == 0:
             res = hssinfo.cluster(

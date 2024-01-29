@@ -26,8 +26,9 @@ def amp_guard_context(fp16=False):
 
 class Trainer:
     def __init__(self, training_args):
-        self.training_args = training_args
+        dist.init_parallel_env()
 
+        self.training_args = training_args
         self.folder_dir = (
             f"MAE_{training_args.model_name}_elayer{training_args.encoder_num_layers}_"
             + f"dlayer{training_args.decoder_num_layers}_head{training_args.head}_dm{training_args.d_model}_"
@@ -119,7 +120,6 @@ class Trainer:
             self.scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
 
         if self.training_args.distribute:
-            dist.init_parallel_env()
             self.net = paddle.DataParallel(self.net)
         self.logger.info(self.net)
 
@@ -165,32 +165,52 @@ class Trainer:
             self.net.train()  # ensure dropout layers are in train mode
             tr_s_time = time()
             epoch_step = 0
-            for batch_data in tqdm.tqdm(self.train_dataloader):
+            for batch_data in tqdm.tqdm(self.train_dataloader, disable=True):
                 his, his_mask, tgt, tgt_mask = batch_data
                 _, training_loss = self.train_one_step(his, his_mask, tgt, tgt_mask)
                 # self.logger.info(f"training_loss: {training_loss.numpy()}")
                 self.writer.add_scalar("train/loss", training_loss, global_step)
                 epoch_step += 1
                 global_step += 1
+                if global_step % self.training_args.update_graph_interval_steps == 0:
+                    if isinstance(self.net, paddle.DataParallel):
+                        self.net._layers.update_graph()
+                    else:
+                        self.net.update_graph()
+
             self.logger.info(f"learning_rate: {self.optimizer.get_lr()}")
             self.logger.info(f"epoch: {epoch}, train time cost:{time() - tr_s_time}")
             self.logger.info(f"epoch: {epoch}, total time cost:{time() - s_time}")
 
             if epoch % self.training_args.eval_interval_epochs == 0 and epoch > 0:
                 eval_loss = self.compute_eval_loss()
-                self.writer.add_scalar("eval/loss", eval_loss, epoch)
-                if eval_loss < best_eval_loss:
-                    best_eval_loss = eval_loss
-                    best_epoch = epoch
-                    self.logger.info(f"best_epoch: {best_epoch}")
-                    self.logger.info(f"eval_loss: {eval_loss}")
-                    params_filename = os.path.join(self.save_path, "epoch_best.params")
-                    optim_params_filename = os.path.join(
-                        self.save_path, "epoch_best.pdopt"
-                    )
-                    paddle.save(self.net.state_dict(), params_filename)
-                    paddle.save(self.optimizer.state_dict(), optim_params_filename)
-                    self.logger.info(f"save parameters to file: {params_filename}")
+                self.compute_test_loss()
+                if dist.get_rank() == 0:
+                    self.writer.add_scalar("eval/loss", eval_loss, epoch)
+                    if eval_loss < best_eval_loss:
+                        best_eval_loss = eval_loss
+                        best_epoch = epoch
+                        self.logger.info(f"best_epoch: {best_epoch}")
+                        self.logger.info(f"eval_loss: {eval_loss}")
+                        params_filename = os.path.join(
+                            self.save_path, "epoch_best.params"
+                        )
+                        optim_params_filename = os.path.join(
+                            self.save_path, "epoch_best.pdopt"
+                        )
+                        params_epoch_filename = os.path.join(
+                            self.save_path, f"epoch_{epoch}.params"
+                        )
+                        optim_params_epoch_filename = os.path.join(
+                            self.save_path, f"epoch_{epoch}.pdopt"
+                        )
+                        paddle.save(self.net.state_dict(), params_filename)
+                        paddle.save(self.optimizer.state_dict(), optim_params_filename)
+                        paddle.save(self.net.state_dict(), params_epoch_filename)
+                        paddle.save(
+                            self.optimizer.state_dict(), optim_params_epoch_filename
+                        )
+                        self.logger.info(f"save parameters to file: {params_filename}")
 
         self.logger.info(f"best epoch: {best_epoch}")
         self.logger.info("apply the best val model on the test dataset ...")
@@ -261,8 +281,14 @@ class Trainer:
                 all_eval_loss.append(eval_loss.numpy())
 
             eval_loss = np.mean(all_eval_loss)
-            self.logger.info(f"eval cost time: {time() - start_time}s")
-            self.logger.info(f"eval_loss: {eval_loss}")
+            all_eval_loss = []
+            dist.all_gather_object(all_eval_loss, eval_loss)
+            if dist.get_rank() == 0:
+                eval_loss = np.mean(
+                    [all_eval_loss[i] for i in range(dist.get_world_size())]
+                )
+                self.logger.info(f"eval cost time: {time() - start_time}s")
+                self.logger.info(f"eval_loss: {eval_loss}")
         return eval_loss
 
     def compute_test_loss(self):
@@ -286,6 +312,21 @@ class Trainer:
 
             self.logger.info(f"preds: {str(preds.shape)}")
             self.logger.info(f"tgts: {trues.shape}")
+
+            all_preds = []
+            all_trues = []
+            dist.all_gather_object(all_preds, preds)
+            dist.all_gather_object(all_trues, trues)
+
+            if dist.get_rank() == 0:
+                preds = np.concatenate(
+                    [all_preds[i] for i in range(dist.get_world_size())], axis=0
+                )
+                trues = np.concatenate(
+                    [all_trues[i] for i in range(dist.get_world_size())], axis=0
+                )
+            else:
+                return
 
             # 计算误差
             excel_list = []

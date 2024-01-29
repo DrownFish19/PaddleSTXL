@@ -38,6 +38,12 @@ parser.add_argument("--weight_decay", type=float, default=1e-8)
 parser.add_argument("--start_epoch", type=int, default=0, help="start epoch")
 parser.add_argument("--train_epochs", type=int, default=20, help="train epochs")
 parser.add_argument("--eval_interval_epochs", type=int, default=2, help="train epochs")
+parser.add_argument(
+    "--update_graph_interval_steps",
+    type=int,
+    default=200,
+    help="update_graph_interval_steps",
+)
 parser.add_argument("--finetune_epochs", type=int, default=50, help="finetune epochs")
 parser.add_argument("--batch_size", type=int, default=2, help="batch_size")
 parser.add_argument("--patience", type=int, default=8, help="early stopping patience")
