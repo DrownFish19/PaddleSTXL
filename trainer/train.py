@@ -99,16 +99,6 @@ class Trainer:
             self.test_dataset, batch_sampler=test_sampler
         )
 
-        self.train_dataloader = tqdm.tqdm(
-            self.train_dataloader, disable=not self.training_args.tqdm
-        )
-        self.eval_dataloader = tqdm.tqdm(
-            self.eval_dataloader, disable=not self.training_args.tqdm
-        )
-        self.test_dataloader = tqdm.tqdm(
-            self.test_dataloader, disable=not self.training_args.tqdm
-        )
-
     def _build_model(self):
         if os.path.exists(self.training_args.adj_path):
             self.graph = SpatialGraph(args=self.training_args, build=False)
@@ -243,6 +233,9 @@ class Trainer:
             tr_s_time = time()
             epoch_step = 0
             self.lr_scheduler.step()
+            self.train_dataloader = tqdm.tqdm(
+                self.train_dataloader, disable=not self.training_args.tqdm
+            )
             for batch_data in self.train_dataloader:
                 _, training_loss = self.train_one_step(*batch_data)
                 self.writer.add_scalar("train/loss", training_loss, global_step)
@@ -287,6 +280,9 @@ class Trainer:
         with paddle.no_grad():
             all_eval_loss = []  # 记录了所有batch的loss
             start_time = time()
+            self.eval_dataloader = tqdm.tqdm(
+                self.eval_dataloader, disable=not self.training_args.tqdm
+            )
             for batch_data in self.eval_dataloader:
                 predict_output, eval_loss = self.eval_one_step(*batch_data)
                 all_eval_loss.append(eval_loss.numpy())
@@ -307,6 +303,9 @@ class Trainer:
         with paddle.no_grad():
             preds, tgts = [], []
             start_time = time()
+            self.test_dataloader = tqdm.tqdm(
+                self.test_dataloader, disable=not self.training_args.tqdm
+            )
             for batch_data in self.test_dataloader:
                 his, his_mask, his_idx, tgt, tgt_mask, tgt_idx = batch_data
                 predict_output, _ = self.test_one_step(*batch_data)

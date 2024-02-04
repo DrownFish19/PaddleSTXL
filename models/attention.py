@@ -44,6 +44,8 @@ class SmoothAttention(nn.Layer):
             dtype=paddle.int64,
             is_bias=True,
         )
+        self.corr_values.stop_gradient = True
+        self.corr_indices.stop_gradient = True
 
     def forward(self, query, key, value, mask=None, dropout=None):
         """
