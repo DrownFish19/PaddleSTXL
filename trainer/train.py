@@ -39,7 +39,7 @@ class Trainer:
             + f"einput{training_args.input_size}_dinput{training_args.input_size}_"
             + f"doutput{training_args.decoder_output_size}_drop{training_args.dropout}_"
             + f"lr{training_args.learning_rate}_wd{training_args.weight_decay}_bs{training_args.batch_size}_"
-            + f"topk{training_args.top_k}_att{training_args.attention}_trepoch{training_args.train_epochs}_"
+            + f"topk{training_args.node_top_k}_att{training_args.attention}_trepoch{training_args.train_epochs}_"
             + f"finepoch{training_args.finetune_epochs}"
         )
 
@@ -54,6 +54,14 @@ class Trainer:
             logdir=os.path.join(self.save_path, "visualdl")
         )
 
+        self.logger.info(f"save folder: {self.folder_dir}")
+        self.logger.info(f"save path  : {self.save_path}")
+        self.logger.info(f"log  file  : {self.logger.log_file}")
+
+        self._build_data()
+        self._build_model()
+        self._build_optimizer()
+
         if training_args.start_epoch == 0:
             self.logger.info(f"create params directory {self.save_path}")
         elif training_args.start_epoch > 0:
@@ -63,16 +71,6 @@ class Trainer:
         if self.training_args.continue_training:
             self._load_best_params()
             self.logger.info(f"train from best params directory {self.save_path}")
-
-        self.logger.info(f"save folder: {self.folder_dir}")
-        self.logger.info(f"save path  : {self.save_path}")
-        self.logger.info(f"log  file  : {self.logger.log_file}")
-
-        self.finetune = False
-
-        self._build_data()
-        self._build_model()
-        self._build_optimizer()
 
     def _build_data(self):
         self.train_dataset = TrafficFlowDataset(self.training_args, "train")
@@ -121,7 +119,7 @@ class Trainer:
 
         nn.initializer.set_global_initializer(
             nn.initializer.XavierUniform(),
-            nn.initializer.XavierUniform(),
+            nn.initializer.ConstantInitializer(0.0),
         )
 
         if "PaddleSTXL" in self.training_args.model_name:
@@ -203,9 +201,13 @@ class Trainer:
         params_name = os.path.join(self.save_path, MODEL_PARAMS)
         params_opt_name = os.path.join(self.save_path, OPT_PARAMS)
         params_graph_name = os.path.join(self.save_path, GRAPH_PARAMS)
-        self.net.set_state_dict(paddle.load(params_name))
         self.optimizer.set_state_dict(paddle.load(params_opt_name))
-        self.graph.load_graph(params_graph_name)
+        if isinstance(self.net, paddle.DataParallel):
+            self.net._layers.set_state_dict(paddle.load(params_name))
+            self.net._layers.load_graph(params_graph_name)
+        else:
+            self.net.set_state_dict(paddle.load(params_name))
+            self.net.load_graph(params_graph_name)
         self.logger.info(f"load weight from: {params_name}")
 
     def _load_params(self, epoch):
@@ -215,9 +217,13 @@ class Trainer:
         params_name = os.path.join(self.save_path, model_name)
         params_opt_name = os.path.join(self.save_path, opt_name)
         params_graph_name = os.path.join(self.save_path, graph_name)
-        self.net.set_state_dict(paddle.load(params_name))
         self.optimizer.set_state_dict(paddle.load(params_opt_name))
-        self.graph.load_graph(params_graph_name)
+        if isinstance(self.net, paddle.DataParallel):
+            self.net._layers.set_state_dict(paddle.load(params_name))
+            self.net._layers.load_graph(params_graph_name)
+        else:
+            self.net.set_state_dict(paddle.load(params_name))
+            self.net.load_graph(params_graph_name)
         self.logger.info(f"load weight from: {params_name}")
 
     def train(self):
