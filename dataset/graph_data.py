@@ -285,13 +285,7 @@ class SpatialGraph:
             connect_edge_weights.append(weights_dict[key])
         return connect_edge_src_idx, connect_edge_dst_idx, connect_edge_weights
 
-    def load_graph(self):
-        dataframe = pd.read_csv(self.args.adj_path)
-        self.edge_src_idx = dataframe["src"].values.tolist()
-        self.edge_dst_idx = dataframe["dst"].values.tolist()
-        self.edge_weights = dataframe["weight"].values.tolist()
-
-    def save_graph(self):
+    def save_graph(self, path=None):
         dataframe = pd.DataFrame(
             {
                 "src": self.edge_src_idx,
@@ -299,7 +293,44 @@ class SpatialGraph:
                 "weight": self.edge_weights,
             }
         )
-        dataframe.to_csv(self.args.adj_path, index=False)
+        if path is not None:
+            dataframe.to_csv(path, index=False)
+        else:
+            dataframe.to_csv(self.args.adj_path, index=False)
+
+    def save_group_graph(self, path=None):
+        dataframe = pd.DataFrame(
+            {
+                "src": self.group_connect_edge_src_idx[1],
+                "dst": self.group_connect_edge_dst_idx[1],
+                "weight": self.group_connect_edge_weights[1],
+            }
+        )
+        if path is not None:
+            dataframe.to_csv(path, index=False)
+        else:
+            dataframe.to_csv(self.args.group_path, index=False)
+
+    def save_group_mapping(self, path=None):
+        dataframe = pd.DataFrame(
+            {
+                "src": self.group_mapping_edge_src_idx[1],
+                "dst": self.group_mapping_edge_dst_idx[1],
+            }
+        )
+        if path is not None:
+            dataframe.to_csv(path, index=False)
+        else:
+            dataframe.to_csv(self.args.mapping_path, index=False)
+
+    def load_graph(self, path=None):
+        if path is not None:
+            dataframe = pd.read_csv(path)
+        else:
+            dataframe = pd.read_csv(self.args.adj_path)
+        self.edge_src_idx = dataframe["src"].values.tolist()
+        self.edge_dst_idx = dataframe["dst"].values.tolist()
+        self.edge_weights = dataframe["weight"].values.tolist()
 
 
 if __name__ == "__main__":

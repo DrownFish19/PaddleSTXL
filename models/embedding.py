@@ -8,7 +8,7 @@ class SpatialPositionalEmbedding(nn.Layer):
     def __init__(self, args):
         super().__init__()
         self.dropout = nn.Dropout(p=args.dropout)
-        self.embedding = paddle.nn.Embedding(args.num_nodes, args.d_model)
+        self.embedding = paddle.nn.Embedding(args.num_nodes, int(args.d_model / 4))
 
     def forward(self, x):
         """
@@ -27,7 +27,7 @@ class TemporalPositionalEmbedding(nn.Layer):
         self.args = args
         self.dropout = nn.Dropout(p=args.dropout)
         self.max_len = max(args.his_len, args.tgt_len)
-        self.d_model = args.d_model
+        self.d_model = int(args.d_model / 4)
         # computing the positional encodings once in log space
         pe = paddle.zeros([self.max_len, self.d_model])
         for pos in range(self.max_len):
@@ -52,6 +52,19 @@ class TemporalPositionalEmbedding(nn.Layer):
         return embed
 
 
+class TemporalSectionEmbedding(nn.Layer):
+    def __init__(self, args, section_nums=12 * 24):
+        """
+        section indicate the section number of the day
+        """
+        super(TemporalSectionEmbedding, self).__init__()
+        self.embedding = paddle.nn.Embedding(section_nums, int(args.d_model / 4))
+
+    def forward(self, x):
+        x = paddle.cast(x, "int64")[..., 0]
+        return self.embedding(x)
+
+
 class TrafficFlowEmbedding(nn.Layer):
     def __init__(self, args):
         super().__init__()
@@ -60,17 +73,24 @@ class TrafficFlowEmbedding(nn.Layer):
         self.dense = nn.Sequential(
             nn.Linear(self.args.input_size, self.args.d_model, bias_attr=True),
             nn.Silu(),
-            nn.Linear(self.args.d_model, self.args.d_model, bias_attr=True),
+            nn.Linear(self.args.d_model, int(self.args.d_model / 4), bias_attr=True),
         )
 
         self.spatial_position_embedding = SpatialPositionalEmbedding(args=args)
         self.temporal_position_embedding = TemporalPositionalEmbedding(args=args)
-
+        self.temporal_section_embedding = TemporalSectionEmbedding(args=args)
         self.layer_norm = nn.LayerNorm(self.args.d_model)
 
-    def forward(self, x):
+    def forward(self, x, idx):
         x = self.dense(x)
         spatial_emb = self.spatial_position_embedding(x)
         temporal_emb = self.temporal_position_embedding(x)
-        x = x + self.layer_norm(x + spatial_emb + temporal_emb)
+        section_emb = self.temporal_section_embedding(idx)
+
+        spatial_emb = paddle.expand_as(spatial_emb, x)
+        temporal_emb = paddle.expand_as(temporal_emb, x)
+        section_emb = paddle.expand_as(section_emb, x)
+
+        x = paddle.concat([x, spatial_emb, temporal_emb, section_emb], axis=-1)
+        x = self.layer_norm(x)
         return x

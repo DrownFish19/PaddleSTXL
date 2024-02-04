@@ -30,7 +30,8 @@ class TrafficFlowDataset(io.Dataset):
 
         origin_data = np.load(self.data_path)["data"].astype(np.float32)
         self.data_mask = origin_data[:, :, :1]
-        self.data_input = origin_data[:, :, 1:2]
+        self.data_index = origin_data[:, :, 1:2]
+        self.data_input = origin_data[:, :, 2:3]
         self.seq_len, self.num_nodes, self.dims = self.data_input.shape
         self.data_type = data_type
 
@@ -63,9 +64,11 @@ class TrafficFlowDataset(io.Dataset):
         # [T, N, F]
         his = self.data_input[his_begin:his_end]
         his_mask = self.data_mask[his_begin:his_end]
+        his_idx = self.data_index[his_begin:his_end]
         tgt = self.data_input[tgt_begin:tgt_end]
         tgt_mask = self.data_mask[tgt_begin:tgt_end]
-        return his, his_mask, tgt, tgt_mask
+        tgt_idx = self.data_index[tgt_begin:tgt_end]
+        return his, his_mask, his_idx, tgt, tgt_mask, tgt_idx
 
     def __len__(self):
         return (

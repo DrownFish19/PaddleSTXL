@@ -32,6 +32,48 @@ class VanillaAttention(nn.Layer):
         return paddle.matmul(p_attn, value)  # [B,N,H,T1,T2] * [B,N,H,T1,D]
 
 
+class SmoothAttention(nn.Layer):
+    def __init__(self, args):
+        super(SmoothAttention, self).__init__()
+        # [N, K]
+        self.corr_values = paddle.create_parameter(
+            [args.num_nodes, args.node_top_k], dtype=paddle.get_default_dtype()
+        )
+        self.corr_indices = paddle.create_parameter(
+            [args.num_nodes, args.node_top_k],
+            dtype=paddle.int64,
+            is_bias=True,
+        )
+        self.corr_values.stop_gradient = True
+        self.corr_indices.stop_gradient = True
+
+    def forward(self, query, key, value, mask=None, dropout=None):
+        """
+        :param query:  [B,N,H,T,D]
+        :param key: [B,N,H,T,D]
+        :param value: [B,N,H,T,D]
+        :param mask: [B,1,1,T2,T2]
+        :param dropout:
+        :return: [B,N,H,T1,d], [B,N,H,T1,T2]
+        """
+        B, N, H, T, D = query.shape
+
+        # [B, N ,H, T, D] => [k, B, N, H, T, D]
+        key_top_k = key[:, self.corr_indices, :, :, :]
+        key = paddle.einsum("nk, kbnhtd -> bnhtd", self.corr_values, key_top_k)
+
+        # [B,N,H,T1,T2]
+        scores = paddle.matmul(query, key, transpose_y=True) / math.sqrt(D)
+
+        if mask is not None:
+            scores = scores + mask
+        p_attn = F.softmax(scores, axis=-1)  # [B,N,H,T1,T2]
+        if dropout is not None:
+            p_attn = dropout(p_attn)
+
+        return paddle.matmul(p_attn, value)  # [B,N,H,T1,T2] * [B,N,H,T1,D]
+
+
 class MultiHeadAttentionAwareTemporalContext(nn.Layer):
     def __init__(self, args, query_conv_type="1DConv", key_conv_type="1DConv"):
         """
@@ -78,11 +120,12 @@ class MultiHeadAttentionAwareTemporalContext(nn.Layer):
             self.key_conv = deepcopy(conv_causal)
             self.value_conv = deepcopy(conv_causal)
 
-        self.out_conv = deepcopy(conv_1d)
+        self.out_mlp = nn.Linear(args.d_model, args.d_model, bias_attr=True)
 
         self.dropout = nn.Dropout(p=args.dropout)
 
         self.attention = VanillaAttention()
+        self.attention_sm = SmoothAttention(self.training_args)
         self.attention_type = args.attention
 
     def subsequent_mask(self, size):
@@ -139,8 +182,11 @@ class MultiHeadAttentionAwareTemporalContext(nn.Layer):
         value = value.reshape(multi_head_shape).transpose(perm)
 
         # [B,N,H,T,d]
-        x = self.attention(query, key, value, mask=mask, dropout=self.dropout)
+        # x = self.attention(query, key, value, mask=mask, dropout=self.dropout)
+        x_sm = self.attention_sm(query, key, value, mask=mask, dropout=self.dropout)
+        x = x_sm
+        # x = x + x_sm
 
         # [B,N,T,D]
         x = x.transpose([0, 3, 1, 2, 4]).reshape([B, -1, N, self.heads * self.head_dim])
-        return self.out_conv(x)
+        return self.out_mlp(x)

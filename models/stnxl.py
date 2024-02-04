@@ -2,12 +2,18 @@ from copy import deepcopy
 
 import paddle
 import paddle.nn as nn
-from attention import MultiHeadAttentionAwareTemporalContext
-from embedding import TrafficFlowEmbedding
-from endecoder import Decoder, DecoderLayer, Encoder, EncoderLayer
-from graphconv import SpatialGraphNeuralNetwork
 
 from dataset import SpatialGraph
+from models import (
+    Decoder,
+    DecoderLayer,
+    Encoder,
+    EncoderLayer,
+    MultiHeadAttentionAwareTemporalContext,
+    SmoothAttention,
+    SpatialGraphNeuralNetwork,
+    TrafficFlowEmbedding,
+)
 
 
 class STNXL(nn.Layer):
@@ -53,16 +59,38 @@ class STNXL(nn.Layer):
             training_args.d_model, training_args.decoder_output_size
         )
         self.decoder_output = None
+        self.corr_values = paddle.ones(
+            shape=[self.graph.node_nums, self.training_args.node_top_k]
+        )
+        self.corr_values = paddle.nn.functional.softmax(self.corr_values, axis=-1)
+        self.corr_indices = paddle.repeat_interleave(
+            paddle.arange(self.graph.node_nums),
+            self.training_args.node_top_k,
+        )
+        self.corr_indices = self.corr_indices.reshape(
+            [self.graph.node_nums, self.training_args.node_top_k]
+        )
+        self.apply(self.apply_correlation)
 
-    def encode(self, src):
-        src_dense = self.encoder_embedding(src)
+    def encode(self, src, src_idx):
+        src_dense = self.encoder_embedding(src, src_idx)
         encoder_output = self.encoder(src_dense)
         return encoder_output
 
-    def decode(self, encoder_output, tgt):
-        tgt_dense = self.decoder_embedding(tgt)
-        self.decoder_output = self.decoder(x=tgt_dense, memory=encoder_output)
-        return self.generator(self.decoder_output)
+    def decode(self, encoder_output, tgt, tgt_idx):
+        tgt_dense = self.decoder_embedding(tgt, tgt_idx)
+        decoder_output = self.decoder(x=tgt_dense, memory=encoder_output)
+        if self.decoder_output is None:
+            self.decoder_output = decoder_output
+        else:
+            self.decoder_output = 0.9 * self.decoder_output + 0.1 * decoder_output
+        return self.generator(decoder_output)
+
+    def load_graph(self, graph_file):
+        self.graph.load_graph(graph_file)
+        self.graph.build_group_graph(n=2)
+        self.apply(self.apply_new_graph)
+        self.apply(self.apply_correlation)
 
     def update_graph(self):
         with paddle.no_grad():
@@ -73,6 +101,8 @@ class STNXL(nn.Layer):
                 corr, k=self.training_args.node_top_k, axis=-1
             )
             values = paddle.nn.functional.softmax(values, axis=-1)
+            self.corr_values = paddle.clone(values.detach())
+            self.corr_indices = paddle.clone(indices.detach())
 
             values, indices = values.numpy(), indices.numpy()
             edge_src, edge_dst, edge_weights = [], [], []
@@ -91,9 +121,8 @@ class STNXL(nn.Layer):
             self.graph.edge_dst_idx = deepcopy(edge_dst)
             self.graph.edge_weights = deepcopy(edge_weights)
             self.graph.build_group_graph(n=2)
-            if paddle.distributed.get_rank() == 0:
-                self.graph.save_graph()
             self.apply(self.apply_new_graph)
+            self.apply(self.apply_correlation)
 
     def apply_new_graph(self, layer):
         if isinstance(layer, SpatialGraphNeuralNetwork):
@@ -114,7 +143,12 @@ class STNXL(nn.Layer):
                 self.graph.group_mapping_edge_dst_idx[1]
             )
 
-    def forward(self, src, tgt):
-        encoder_output = self.encode(src)
-        output = self.decode(encoder_output, tgt)
+    def apply_correlation(self, layer):
+        if isinstance(layer, SmoothAttention):
+            layer.corr_values.set_value(self.corr_values)
+            layer.corr_indices.set_value(self.corr_indices)
+
+    def forward(self, src, src_idx, tgt, tgt_idx):
+        encoder_output = self.encode(src, src_idx)
+        output = self.decode(encoder_output, tgt, tgt_idx)
         return output
