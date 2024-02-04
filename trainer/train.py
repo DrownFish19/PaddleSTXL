@@ -58,6 +58,11 @@ class Trainer:
         self.logger.info(f"save path  : {self.save_path}")
         self.logger.info(f"log  file  : {self.logger.log_file}")
 
+        args_message = "\n".join(
+            [f"{k:<20}: {v}" for k, v in vars(training_args).items()]
+        )
+        self.logger.info(f"training_args  : \n{args_message}")
+
         self._build_data()
         self._build_model()
         self._build_optimizer()
@@ -259,6 +264,12 @@ class Trainer:
 
                         self._save_best_params()
                         self._save_params(epoch)
+
+            if epoch == stop_update_graph:
+                self.logger.info(
+                    "stop update graph and group and start to finetune the model ..."
+                )
+                self._load_best_params()
 
             if (
                 epoch % self.training_args.update_graph_epochs == 0
