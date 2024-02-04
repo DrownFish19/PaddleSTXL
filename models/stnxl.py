@@ -10,6 +10,7 @@ from models import (
     Encoder,
     EncoderLayer,
     MultiHeadAttentionAwareTemporalContext,
+    SmoothAttention,
     SpatialGraphNeuralNetwork,
     TrafficFlowEmbedding,
 )
@@ -58,6 +59,18 @@ class STNXL(nn.Layer):
             training_args.d_model, training_args.decoder_output_size
         )
         self.decoder_output = None
+        self.corr_values = paddle.ones(
+            shape=[self.graph.node_nums, self.training_args.node_top_k]
+        )
+        self.corr_values = paddle.nn.functional.softmax(self.corr_values, axis=-1)
+        self.corr_indices = paddle.repeat_interleave(
+            paddle.arange(self.graph.node_nums),
+            self.training_args.node_top_k,
+        )
+        self.corr_indices = self.corr_indices.reshape(
+            [self.graph.node_nums, self.training_args.node_top_k]
+        )
+        self.apply(self.apply_correlation)
 
     def encode(self, src):
         src_dense = self.encoder_embedding(src)
@@ -66,8 +79,12 @@ class STNXL(nn.Layer):
 
     def decode(self, encoder_output, tgt):
         tgt_dense = self.decoder_embedding(tgt)
-        self.decoder_output = self.decoder(x=tgt_dense, memory=encoder_output)
-        return self.generator(self.decoder_output)
+        decoder_output = self.decoder(x=tgt_dense, memory=encoder_output)
+        if self.decoder_output is None:
+            self.decoder_output = decoder_output
+        else:
+            self.decoder_output = 0.9 * self.decoder_output + 0.1 * decoder_output
+        return self.generator(decoder_output)
 
     def update_graph(self):
         with paddle.no_grad():
@@ -78,6 +95,8 @@ class STNXL(nn.Layer):
                 corr, k=self.training_args.node_top_k, axis=-1
             )
             values = paddle.nn.functional.softmax(values, axis=-1)
+            self.corr_values = paddle.clone(values.detach())
+            self.corr_indices = paddle.clone(indices.detach())
 
             values, indices = values.numpy(), indices.numpy()
             edge_src, edge_dst, edge_weights = [], [], []
@@ -99,6 +118,7 @@ class STNXL(nn.Layer):
             if paddle.distributed.get_rank() == 0:
                 self.graph.save_graph()
             self.apply(self.apply_new_graph)
+            self.apply(self.apply_correlation)
 
     def apply_new_graph(self, layer):
         if isinstance(layer, SpatialGraphNeuralNetwork):
@@ -118,6 +138,11 @@ class STNXL(nn.Layer):
             layer.up_sampling_edge_dst_idx = paddle.to_tensor(
                 self.graph.group_mapping_edge_dst_idx[1]
             )
+
+    def apply_correlation(self, layer):
+        if isinstance(layer, SmoothAttention):
+            layer.corr_values = self.corr_values
+            layer.corr_indices = self.corr_indices
 
     def forward(self, src, tgt):
         encoder_output = self.encode(src)

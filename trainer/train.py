@@ -14,7 +14,11 @@ import visualdl
 
 from dataset import SpatialGraph, TrafficFlowDataset
 from models import ASTGCN, STGCN, STLSTM, STNXL
-from utils import Logger, masked_mape_np
+from utils import CosineAnnealingWithWarmupDecay, Logger, masked_mape_np
+
+MODEL_PARAMS = "epoch_best.params"
+OPT_PARAMS = "epoch_best.pdopt"
+GRAPH_PARAMS = "epoch_best.graph"
 
 
 def amp_guard_context(fp16=False):
@@ -53,7 +57,12 @@ class Trainer:
         if training_args.start_epoch == 0:
             self.logger.info(f"create params directory {self.save_path}")
         elif training_args.start_epoch > 0:
+            self._load_params(epoch=training_args.start_epoch)
             self.logger.info(f"train from params directory {self.save_path}")
+
+        if self.training_args.continue_training:
+            self._load_best_params()
+            self.logger.info(f"train from best params directory {self.save_path}")
 
         self.logger.info(f"save folder: {self.folder_dir}")
         self.logger.info(f"save path  : {self.save_path}")
@@ -71,13 +80,16 @@ class Trainer:
         self.test_dataset = TrafficFlowDataset(self.training_args, "test")
 
         train_sampler = io.DistributedBatchSampler(
-            self.train_dataset, batch_size=self.training_args.batch_size, shuffle=True
+            self.train_dataset,
+            batch_size=self.training_args.batch_size,
+            shuffle=True,
+            drop_last=True,
         )
         eval_sampler = io.DistributedBatchSampler(
-            self.val_dataset, batch_size=self.training_args.batch_size
+            self.val_dataset, batch_size=self.training_args.batch_size, drop_last=True
         )
         test_sampler = io.DistributedBatchSampler(
-            self.test_dataset, batch_size=self.training_args.batch_size
+            self.test_dataset, batch_size=self.training_args.batch_size, drop_last=True
         )
         self.train_dataloader = io.DataLoader(
             self.train_dataset, batch_sampler=train_sampler
@@ -89,6 +101,16 @@ class Trainer:
             self.test_dataset, batch_sampler=test_sampler
         )
 
+        self.train_dataloader = tqdm.tqdm(
+            self.train_dataloader, disable=not self.training_args.tqdm
+        )
+        self.eval_dataloader = tqdm.tqdm(
+            self.eval_dataloader, disable=not self.training_args.tqdm
+        )
+        self.test_dataloader = tqdm.tqdm(
+            self.test_dataloader, disable=not self.training_args.tqdm
+        )
+
     def _build_model(self):
         if os.path.exists(self.training_args.adj_path):
             self.graph = SpatialGraph(args=self.training_args, build=False)
@@ -98,7 +120,8 @@ class Trainer:
             self.graph.build_group_graph(n=2)
 
         nn.initializer.set_global_initializer(
-            nn.initializer.XavierUniform(), nn.initializer.XavierUniform()
+            nn.initializer.XavierUniform(),
+            nn.initializer.XavierUniform(),
         )
 
         if "PaddleSTXL" in self.training_args.model_name:
@@ -109,11 +132,6 @@ class Trainer:
             self.net = STGCN(self.training_args, graph=self.graph)
         elif "PaddleASTGCN" in self.training_args.model_name:
             self.net = ASTGCN(self.training_args, graph=self.graph)
-
-        if self.training_args.continue_training:
-            params_filename = os.path.join(self.save_path, "epoch_best.params")
-            self.net.set_state_dict(paddle.load(params_filename))
-            self.logger.info(f"load weight from: {params_filename}")
 
         if self.training_args.fp16:
             self.net = paddle.amp.decorate(models=self.net, level="O2")
@@ -136,28 +154,77 @@ class Trainer:
         self.criterion2 = nn.MSELoss()  # 定义损失函数
 
     def _build_optimizer(self):
-        # 定义优化器，传入所有网络参数
+        self.lr_scheduler = CosineAnnealingWithWarmupDecay(
+            max_lr=self.training_args.learning_rate,
+            min_lr=self.training_args.learning_rate * 0.1,
+            warmup_step=self.training_args.warmup_step,
+            decay_step=self.training_args.decay_step,
+        )
+
         self.optimizer = optimizer.AdamW(
             parameters=self.net.parameters(),
-            learning_rate=self.training_args.learning_rate,
+            learning_rate=self.lr_scheduler,
             weight_decay=self.training_args.weight_decay,
             multi_precision=True,
         )
-        if self.training_args.continue_training:
-            optim_params_filename = os.path.join(self.save_path, "epoch_best.pdopt")
-            self.optimizer.set_state_dict(paddle.load(optim_params_filename))
 
         self.logger.info("Optimizer's state_dict:")
         for var_name in self.optimizer.state_dict():
             self.logger.info(f"{var_name} \t {self.optimizer.state_dict()[var_name]}")
 
+    def _save_best_params(self):
+        params_name = os.path.join(self.save_path, MODEL_PARAMS)
+        params_opt_name = os.path.join(self.save_path, OPT_PARAMS)
+        params_graph_name = os.path.join(self.save_path, GRAPH_PARAMS)
+        paddle.save(self.net.state_dict(), params_name)
+        paddle.save(self.optimizer.state_dict(), params_opt_name)
+        self.graph.save_graph(params_graph_name)
+        self.logger.info(f"save parameters to file: {params_name}")
+
+    def _save_params(self, epoch):
+        model_name = f"epoch_{epoch}.params"
+        opt_name = f"epoch_{epoch}.pdopt"
+        graph_name = f"epoch_{epoch}.graph"
+        group_name = f"epoch_{epoch}.group"
+        mapping_name = f"epoch_{epoch}.mapping"
+        params_name = os.path.join(self.save_path, model_name)
+        params_opt_name = os.path.join(self.save_path, opt_name)
+        params_graph_name = os.path.join(self.save_path, graph_name)
+        params_group_name = os.path.join(self.save_path, group_name)
+        params_mapping_name = os.path.join(self.save_path, mapping_name)
+        paddle.save(self.net.state_dict(), params_name)
+        paddle.save(self.optimizer.state_dict(), params_opt_name)
+        self.graph.save_graph(params_graph_name)
+        self.graph.save_group_graph(params_group_name)
+        self.graph.save_group_mapping(params_mapping_name)
+        self.logger.info(f"save parameters to file: {params_name}")
+
+    def _load_best_params(self):
+        params_name = os.path.join(self.save_path, MODEL_PARAMS)
+        params_opt_name = os.path.join(self.save_path, OPT_PARAMS)
+        params_graph_name = os.path.join(self.save_path, GRAPH_PARAMS)
+        self.net.set_state_dict(paddle.load(params_name))
+        self.optimizer.set_state_dict(paddle.load(params_opt_name))
+        self.graph.load_graph(params_graph_name)
+        self.logger.info(f"load weight from: {params_name}")
+
+    def _load_params(self, epoch):
+        model_name = f"epoch_{epoch}.params"
+        opt_name = f"epoch_{epoch}.pdopt"
+        graph_name = f"epoch_{epoch}.graph"
+        params_name = os.path.join(self.save_path, model_name)
+        params_opt_name = os.path.join(self.save_path, opt_name)
+        params_graph_name = os.path.join(self.save_path, graph_name)
+        self.net.set_state_dict(paddle.load(params_name))
+        self.optimizer.set_state_dict(paddle.load(params_opt_name))
+        self.graph.load_graph(params_graph_name)
+        self.logger.info(f"load weight from: {params_name}")
+
     def train(self):
         self.logger.info("start train...")
-
         s_time = time()
         best_eval_loss = np.inf
-        best_epoch = 0
-        global_step = 0
+        best_epoch, global_step = 0, 0
 
         for epoch in range(
             self.training_args.start_epoch, self.training_args.train_epochs
@@ -165,26 +232,20 @@ class Trainer:
             self.net.train()  # ensure dropout layers are in train mode
             tr_s_time = time()
             epoch_step = 0
-            for batch_data in tqdm.tqdm(self.train_dataloader, disable=True):
-                his, his_mask, tgt, tgt_mask = batch_data
-                _, training_loss = self.train_one_step(his, his_mask, tgt, tgt_mask)
-                # self.logger.info(f"training_loss: {training_loss.numpy()}")
+            self.lr_scheduler.step()
+            for batch_data in self.train_dataloader:
+                _, training_loss = self.train_one_step(*batch_data)
                 self.writer.add_scalar("train/loss", training_loss, global_step)
                 epoch_step += 1
                 global_step += 1
-                if global_step % self.training_args.update_graph_interval_steps == 0:
-                    if isinstance(self.net, paddle.DataParallel):
-                        self.net._layers.update_graph()
-                    else:
-                        self.net.update_graph()
 
             self.logger.info(f"learning_rate: {self.optimizer.get_lr()}")
             self.logger.info(f"epoch: {epoch}, train time cost:{time() - tr_s_time}")
             self.logger.info(f"epoch: {epoch}, total time cost:{time() - s_time}")
 
             if epoch % self.training_args.eval_interval_epochs == 0 and epoch > 0:
-                eval_loss = self.compute_eval_loss()
-                self.compute_test_loss()
+                eval_loss = self.eval()
+                self.test()
                 if dist.get_rank() == 0:
                     self.writer.add_scalar("eval/loss", eval_loss, epoch)
                     if eval_loss < best_eval_loss:
@@ -192,34 +253,109 @@ class Trainer:
                         best_epoch = epoch
                         self.logger.info(f"best_epoch: {best_epoch}")
                         self.logger.info(f"eval_loss: {eval_loss}")
-                        params_filename = os.path.join(
-                            self.save_path, "epoch_best.params"
-                        )
-                        optim_params_filename = os.path.join(
-                            self.save_path, "epoch_best.pdopt"
-                        )
-                        params_epoch_filename = os.path.join(
-                            self.save_path, f"epoch_{epoch}.params"
-                        )
-                        optim_params_epoch_filename = os.path.join(
-                            self.save_path, f"epoch_{epoch}.pdopt"
-                        )
-                        paddle.save(self.net.state_dict(), params_filename)
-                        paddle.save(self.optimizer.state_dict(), optim_params_filename)
-                        paddle.save(self.net.state_dict(), params_epoch_filename)
-                        paddle.save(
-                            self.optimizer.state_dict(), optim_params_epoch_filename
-                        )
-                        self.logger.info(f"save parameters to file: {params_filename}")
+
+                        self._save_best_params()
+                        self._save_params(epoch)
+
+            if (
+                epoch % self.training_args.update_graph_epochs == 0
+                and epoch > 0
+                and epoch < self.training_args.train_epochs - 1
+            ):
+                if isinstance(self.net, paddle.DataParallel):
+                    self.net._layers.update_graph()
+                else:
+                    self.net.update_graph()
 
         self.logger.info(f"best epoch: {best_epoch}")
         self.logger.info("apply the best val model on the test dataset ...")
+        self._load_best_params()
+        self.test()
 
-        # params_filename = os.path.join(self.save_path, f"epoch_{best_epoch}.params")
-        params_filename = os.path.join(self.save_path, "epoch_best.params")
-        self.logger.info(f"load weight from: {params_filename}")
-        self.net.set_state_dict(paddle.load(params_filename))
-        self.compute_test_loss()
+    def eval(self):
+        self.logger.info("start to compute eval loss ...")
+        with paddle.no_grad():
+            all_eval_loss = []  # 记录了所有batch的loss
+            start_time = time()
+            for batch_data in self.eval_dataloader:
+                predict_output, eval_loss = self.eval_one_step(*batch_data)
+                all_eval_loss.append(eval_loss.numpy())
+
+            eval_loss = np.mean(all_eval_loss)
+            all_eval_loss = []
+            if dist.get_world_size() > 1:
+                dist.all_gather_object(all_eval_loss, eval_loss)
+                eval_loss = np.mean(
+                    [all_eval_loss[i] for i in range(dist.get_world_size())]
+                )
+                self.logger.info(f"eval cost time: {time() - start_time}s")
+                self.logger.info(f"eval_loss: {eval_loss}")
+        return eval_loss
+
+    def test(self):
+        self.logger.info("start to compute test loss ...")
+        with paddle.no_grad():
+            preds, tgts = [], []
+            start_time = time()
+            for batch_data in self.test_dataloader:
+                his, his_mask, tgt, tgt_mask = batch_data
+                predict_output, _ = self.test_one_step(*batch_data)
+
+                preds.append(predict_output.detach().numpy())
+                tgts.append(tgt.detach().numpy())
+            self.logger.info(f"test time on whole data: {time() - start_time}s")
+
+            preds = np.concatenate(preds, axis=0)  # [B,N,T,1]
+            trues = np.concatenate(tgts, axis=0)  # [B,N,T,F]
+            preds = self.test_dataset.inverse_transform(preds, axis=-1)  # [B,N,T,1]
+            trues = self.test_dataset.inverse_transform(trues, axis=-1)  # [B,N,T,1]
+
+            self.logger.info(f"preds: {str(preds.shape)}")
+            self.logger.info(f"tgts: {trues.shape}")
+
+            if dist.get_world_size() > 1:
+                all_preds = []
+                all_trues = []
+                dist.all_gather_object(all_preds, preds)
+                dist.all_gather_object(all_trues, trues)
+
+                if dist.get_rank() == 0:
+                    preds = np.concatenate(
+                        [all_preds[i] for i in range(dist.get_world_size())], axis=0
+                    )
+                    trues = np.concatenate(
+                        [all_trues[i] for i in range(dist.get_world_size())], axis=0
+                    )
+                else:
+                    return
+
+            # 计算误差
+            excel_list = []
+            prediction_length = trues.shape[1]
+
+            for i in range(prediction_length):
+                assert preds.shape[0] == trues.shape[0]
+                pred = preds[:, i, :, 0]
+                tgt = trues[:, i, :, 0]
+                mae = skmetrics.mean_absolute_error(tgt, pred)
+                rmse = skmetrics.mean_squared_error(tgt, pred) ** 0.5
+                mape = masked_mape_np(tgt, pred, 0)
+                self.logger.info(f"{i} MAE: {mae}")
+                self.logger.info(f"{i} RMSE: {rmse}")
+                self.logger.info(f"{i} MAPE: {mape}")
+                excel_list.extend([mae, rmse, mape])
+
+            # print overall results
+            trues = trues.reshape(-1, 1)
+            preds = preds.reshape(-1, 1)
+            mae = skmetrics.mean_absolute_error(trues, preds)
+            rmse = skmetrics.mean_squared_error(trues, preds) ** 0.5
+            mape = masked_mape_np(trues, preds, 0)
+            self.logger.info(f"all MAE: {mae}")
+            self.logger.info(f"all RMSE: {rmse}")
+            self.logger.info(f"all MAPE: {mape}")
+            excel_list.extend([mae, rmse, mape])
+            self.logger.info(excel_list)
 
     def train_one_step(self, his, his_mask, tgt, tgt_mask):
         """_summary_
@@ -268,96 +404,6 @@ class Trainer:
             loss = self.criterion1(decoder_output, tgt)
         return decoder_output, loss
 
-    def compute_eval_loss(self):
-        self.logger.info("start to compute eval loss ...")
-        with paddle.no_grad():
-            all_eval_loss = []  # 记录了所有batch的loss
-            start_time = time()
-            for batch_data in tqdm.tqdm(self.eval_dataloader):
-                his, his_mask, tgt, tgt_mask = batch_data
-                predict_output, eval_loss = self.eval_one_step(
-                    his, his_mask, tgt, tgt_mask
-                )
-                all_eval_loss.append(eval_loss.numpy())
-
-            eval_loss = np.mean(all_eval_loss)
-            all_eval_loss = []
-            dist.all_gather_object(all_eval_loss, eval_loss)
-            if dist.get_rank() == 0:
-                eval_loss = np.mean(
-                    [all_eval_loss[i] for i in range(dist.get_world_size())]
-                )
-                self.logger.info(f"eval cost time: {time() - start_time}s")
-                self.logger.info(f"eval_loss: {eval_loss}")
-        return eval_loss
-
-    def compute_test_loss(self):
-        self.logger.info("start to compute test loss ...")
-        with paddle.no_grad():
-            preds = []
-            tgts = []
-            start_time = time()
-            for batch_data in tqdm.tqdm(self.test_dataloader):
-                his, his_mask, tgt, tgt_mask = batch_data
-                predict_output, _ = self.test_one_step(his, his_mask, tgt, tgt_mask)
-
-                preds.append(predict_output.detach().numpy())
-                tgts.append(tgt.detach().numpy())
-            self.logger.info(f"test time on whole data: {time() - start_time}s")
-
-            preds = np.concatenate(preds, axis=0)  # [B,N,T,1]
-            trues = np.concatenate(tgts, axis=0)  # [B,N,T,F]
-            preds = self.test_dataset.inverse_transform(preds, axis=-1)  # [B,N,T,1]
-            trues = self.test_dataset.inverse_transform(trues, axis=-1)  # [B,N,T,1]
-
-            self.logger.info(f"preds: {str(preds.shape)}")
-            self.logger.info(f"tgts: {trues.shape}")
-
-            all_preds = []
-            all_trues = []
-            dist.all_gather_object(all_preds, preds)
-            dist.all_gather_object(all_trues, trues)
-
-            if dist.get_rank() == 0:
-                preds = np.concatenate(
-                    [all_preds[i] for i in range(dist.get_world_size())], axis=0
-                )
-                trues = np.concatenate(
-                    [all_trues[i] for i in range(dist.get_world_size())], axis=0
-                )
-            else:
-                return
-
-            # 计算误差
-            excel_list = []
-            prediction_length = trues.shape[1]
-
-            for i in range(prediction_length):
-                assert preds.shape[0] == trues.shape[0]
-                pred = preds[:, i, :, 0]
-                tgt = trues[:, i, :, 0]
-                mae = skmetrics.mean_absolute_error(tgt, pred)
-                rmse = skmetrics.mean_squared_error(tgt, pred) ** 0.5
-                mape = masked_mape_np(tgt, pred, 0)
-                self.logger.info(f"{i} MAE: {mae}")
-                self.logger.info(f"{i} RMSE: {rmse}")
-                self.logger.info(f"{i} MAPE: {mape}")
-                excel_list.extend([mae, rmse, mape])
-
-            # print overall results
-            trues = trues.reshape(-1, 1)
-            preds = preds.reshape(-1, 1)
-            mae = skmetrics.mean_absolute_error(trues, preds)
-            rmse = skmetrics.mean_squared_error(trues, preds) ** 0.5
-            mape = masked_mape_np(trues, preds, 0)
-            self.logger.info(f"all MAE: {mae}")
-            self.logger.info(f"all RMSE: {rmse}")
-            self.logger.info(f"all MAPE: {mape}")
-            excel_list.extend([mae, rmse, mape])
-            self.logger.info(excel_list)
-
     def run_test(self):
-        params_filename = os.path.join(self.save_path, "epoch_best.params")
-        self.logger.info(f"load weight from: {params_filename}")
-        self.net.set_state_dict(paddle.load(params_filename))
-        self.compute_test_loss()
+        self._load_best_params()
+        self.test()

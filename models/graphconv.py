@@ -161,4 +161,4 @@ class SpatialGraphNeuralNetwork(nn.Layer):
 
         node_feats_out = node_feats_out.transpose([1, 2, 0, 3])
         up_sampling_node_feats = up_sampling_node_feats.transpose([1, 2, 0, 3])
-        return x + node_feats_out + up_sampling_node_feats
+        return node_feats_out + up_sampling_node_feats
