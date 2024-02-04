@@ -298,7 +298,7 @@ class Trainer:
             preds, tgts = [], []
             start_time = time()
             for batch_data in self.test_dataloader:
-                his, his_mask, tgt, tgt_mask = batch_data
+                his, his_mask, his_idx, tgt, tgt_mask, tgt_idx = batch_data
                 predict_output, _ = self.test_one_step(*batch_data)
 
                 preds.append(predict_output.detach().numpy())
@@ -357,7 +357,7 @@ class Trainer:
             excel_list.extend([mae, rmse, mape])
             self.logger.info(excel_list)
 
-    def train_one_step(self, his, his_mask, tgt, tgt_mask):
+    def train_one_step(self, his, his_mask, his_idx, tgt, tgt_mask, tgt_idx):
         """_summary_
 
         Args:
@@ -370,7 +370,9 @@ class Trainer:
         self.net.train()
         with amp_guard_context(self.training_args.fp16):
             decoder_input = paddle.zeros_like(tgt)
-            decoder_output = self.net(src=his, tgt=decoder_input)
+            decoder_output = self.net(
+                src=his, src_idx=his_idx, tgt=decoder_input, tgt_idx=tgt_idx
+            )
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
         if self.net.training:
@@ -386,20 +388,24 @@ class Trainer:
                 self.optimizer.clear_grad()
         return decoder_output, loss
 
-    def eval_one_step(self, his, his_mask, tgt, tgt_mask):
+    def eval_one_step(self, his, his_mask, his_idx, tgt, tgt_mask, tgt_idx):
         self.net.eval()
         with amp_guard_context(self.training_args.fp16):
             decoder_input = paddle.zeros_like(tgt)
-            decoder_output = self.net(src=his, tgt=decoder_input)
+            decoder_output = self.net(
+                src=his, src_idx=his_idx, tgt=decoder_input, tgt_idx=tgt_idx
+            )
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
         return decoder_output, loss
 
-    def test_one_step(self, his, his_mask, tgt, tgt_mask):
+    def test_one_step(self, his, his_mask, his_idx, tgt, tgt_mask, tgt_idx):
         self.net.eval()
         with amp_guard_context(self.training_args.fp16):
             decoder_input = paddle.zeros_like(tgt)
-            decoder_output = self.net(src=his, tgt=decoder_input)
+            decoder_output = self.net(
+                src=his, src_idx=his_idx, tgt=decoder_input, tgt_idx=tgt_idx
+            )
             decoder_output = decoder_output * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
         return decoder_output, loss

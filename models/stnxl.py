@@ -72,13 +72,13 @@ class STNXL(nn.Layer):
         )
         self.apply(self.apply_correlation)
 
-    def encode(self, src):
-        src_dense = self.encoder_embedding(src)
+    def encode(self, src, src_idx):
+        src_dense = self.encoder_embedding(src, src_idx)
         encoder_output = self.encoder(src_dense)
         return encoder_output
 
-    def decode(self, encoder_output, tgt):
-        tgt_dense = self.decoder_embedding(tgt)
+    def decode(self, encoder_output, tgt, tgt_idx):
+        tgt_dense = self.decoder_embedding(tgt, tgt_idx)
         decoder_output = self.decoder(x=tgt_dense, memory=encoder_output)
         if self.decoder_output is None:
             self.decoder_output = decoder_output
@@ -144,7 +144,7 @@ class STNXL(nn.Layer):
             layer.corr_values = self.corr_values
             layer.corr_indices = self.corr_indices
 
-    def forward(self, src, tgt):
-        encoder_output = self.encode(src)
-        output = self.decode(encoder_output, tgt)
+    def forward(self, src, src_idx, tgt, tgt_idx):
+        encoder_output = self.encode(src, src_idx)
+        output = self.decode(encoder_output, tgt, tgt_idx)
         return output

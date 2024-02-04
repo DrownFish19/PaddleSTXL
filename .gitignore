@@ -137,3 +137,7 @@ FETCH_HEAD
 
 # experiments
 experiments/*
+
+data/*
+log/*
+results/*

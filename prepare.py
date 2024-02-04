@@ -10,11 +10,13 @@ def split_train_val_test_dataset(args):
     seq_len, num_nodes, dims = whole_data.shape
     print("whole data shape:", whole_data.shape, flush=True)
 
+    idx = np.repeat(np.arange(seq_len), [num_nodes])
+    idx = idx.reshape((seq_len, num_nodes, 1)) % 288
     mask = np.ones((seq_len, num_nodes, 1))
     if "HZME" in args.whole_data_path:
         # add data mask
         mask[np.arange(seq_len) % 288 < 6 * 12, :, :] = 0
-    whole_data = np.concatenate([mask, whole_data], axis=-1)
+    whole_data = np.concatenate([mask, idx, whole_data], axis=-1)
     print("whole data (with data mask) shape:", whole_data.shape, flush=True)
     # step 2: compute data ratio
     train_ratio, val_ratio, test_ratio = map(int, args.split.split(":"))
