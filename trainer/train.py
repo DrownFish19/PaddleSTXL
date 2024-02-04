@@ -226,6 +226,10 @@ class Trainer:
         best_eval_loss = np.inf
         best_epoch, global_step = 0, 0
 
+        start_update_graph = self.training_args.start_epoch
+        stop_update_graph = (
+            self.training_args.train_epochs - self.training_args.finetune_epochs
+        )
         for epoch in range(
             self.training_args.start_epoch, self.training_args.train_epochs
         ):
@@ -259,8 +263,8 @@ class Trainer:
 
             if (
                 epoch % self.training_args.update_graph_epochs == 0
-                and epoch > 0
-                and epoch < self.training_args.train_epochs - 1
+                and epoch > start_update_graph
+                and epoch < stop_update_graph
             ):
                 if isinstance(self.net, paddle.DataParallel):
                     self.net._layers.update_graph()
