@@ -86,6 +86,12 @@ class STNXL(nn.Layer):
             self.decoder_output = 0.9 * self.decoder_output + 0.1 * decoder_output
         return self.generator(decoder_output)
 
+    def load_graph(self, graph_file):
+        self.graph.load_graph(graph_file)
+        self.graph.build_group_graph(n=2)
+        self.apply(self.apply_new_graph)
+        self.apply(self.apply_correlation)
+
     def update_graph(self):
         with paddle.no_grad():
             corr = paddle.einsum(
@@ -115,8 +121,6 @@ class STNXL(nn.Layer):
             self.graph.edge_dst_idx = deepcopy(edge_dst)
             self.graph.edge_weights = deepcopy(edge_weights)
             self.graph.build_group_graph(n=2)
-            if paddle.distributed.get_rank() == 0:
-                self.graph.save_graph()
             self.apply(self.apply_new_graph)
             self.apply(self.apply_correlation)
 
@@ -141,8 +145,8 @@ class STNXL(nn.Layer):
 
     def apply_correlation(self, layer):
         if isinstance(layer, SmoothAttention):
-            layer.corr_values = self.corr_values
-            layer.corr_indices = self.corr_indices
+            layer.corr_values.set_value(self.corr_values)
+            layer.corr_indices.set_value(self.corr_indices)
 
     def forward(self, src, src_idx, tgt, tgt_idx):
         encoder_output = self.encode(src, src_idx)

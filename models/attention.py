@@ -33,10 +33,17 @@ class VanillaAttention(nn.Layer):
 
 
 class SmoothAttention(nn.Layer):
-    def __init__(self):
+    def __init__(self, args):
         super(SmoothAttention, self).__init__()
-        self.corr_values = None  # [N, K]
-        self.corr_indices = None  # [N, K]
+        # [N, K]
+        self.corr_values = paddle.create_parameter(
+            [args.num_nodes, args.node_top_k], dtype=paddle.get_default_dtype()
+        )
+        self.corr_indices = paddle.create_parameter(
+            [args.num_nodes, args.node_top_k],
+            dtype=paddle.int64,
+            is_bias=True,
+        )
 
     def forward(self, query, key, value, mask=None, dropout=None):
         """
@@ -116,7 +123,7 @@ class MultiHeadAttentionAwareTemporalContext(nn.Layer):
         self.dropout = nn.Dropout(p=args.dropout)
 
         self.attention = VanillaAttention()
-        self.attention_sm = SmoothAttention()
+        self.attention_sm = SmoothAttention(self.training_args)
         self.attention_type = args.attention
 
     def subsequent_mask(self, size):
