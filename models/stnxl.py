@@ -1,6 +1,8 @@
 from copy import deepcopy
 
+import numpy as np
 import paddle
+import paddle.distributed as dist
 import paddle.nn as nn
 
 from dataset import SpatialGraph
@@ -59,14 +61,13 @@ class STNXL(nn.Layer):
             training_args.d_model, training_args.decoder_output_size
         )
         self.decoder_output = None
-        self.corr_values = paddle.ones(
+        self.corr_values = np.ones(
             shape=[self.graph.node_nums, self.training_args.node_top_k]
-        )
-        self.corr_values = paddle.nn.functional.softmax(self.corr_values, axis=-1)
-        self.corr_indices = paddle.repeat_interleave(
-            paddle.arange(self.graph.node_nums),
-            self.training_args.node_top_k,
-        )
+        ).astype(np.float32)
+        self.corr_values = self.corr_values / self.training_args.node_top_k
+        self.corr_indices = np.repeat(
+            np.arange(self.graph.node_nums), self.training_args.node_top_k
+        ).astype(np.int64)
         self.corr_indices = self.corr_indices.reshape(
             [self.graph.node_nums, self.training_args.node_top_k]
         )
@@ -101,6 +102,12 @@ class STNXL(nn.Layer):
 
     def update_graph(self):
         with paddle.no_grad():
+            # update all decoder_output
+            if dist.get_world_size() > 1:
+                dist.all_reduce(self.decoder_output)
+                self.decoder_output /= dist.get_world_size()
+                paddle.device.cuda.empty_cache()
+
             corr = paddle.einsum(
                 "btnd,btmd->nm", self.decoder_output, self.decoder_output
             )
@@ -108,8 +115,8 @@ class STNXL(nn.Layer):
                 corr, k=self.training_args.node_top_k, axis=-1
             )
             values = paddle.nn.functional.softmax(values, axis=-1)
-            self.corr_values = deepcopy(values.detach())
-            self.corr_indices = deepcopy(indices.detach())
+            self.corr_values = values.numpy()
+            self.corr_indices = indices.numpy()
 
             values, indices = values.numpy(), indices.numpy()
             edge_src, edge_dst, edge_weights = [], [], []
@@ -130,8 +137,6 @@ class STNXL(nn.Layer):
             self.graph.build_group_graph(n=2)
             self.apply(self.apply_new_graph)
             self.apply(self.apply_correlation)
-
-        paddle.device.cuda.empty_cache()
 
     def apply_new_graph(self, layer):
         if isinstance(layer, SpatialGraphNeuralNetwork):

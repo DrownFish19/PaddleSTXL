@@ -201,6 +201,7 @@ class SpatialGraph:
             dist.barrier()
             dist.broadcast(res, src=0)
         res = res.numpy()
+        paddle.device.cuda.empty_cache()
         return res
 
     def build_group_graph(self, n):

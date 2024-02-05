@@ -309,6 +309,7 @@ class Trainer:
             all_eval_loss = []
             if dist.get_world_size() > 1:
                 dist.all_gather_object(all_eval_loss, eval_loss)
+                paddle.device.cuda.empty_cache()
                 eval_loss = np.mean(
                     [all_eval_loss[i] for i in range(dist.get_world_size())]
                 )
@@ -345,7 +346,7 @@ class Trainer:
                 all_trues = []
                 dist.all_gather_object(all_preds, preds)
                 dist.all_gather_object(all_trues, trues)
-
+                paddle.device.cuda.empty_cache()
                 if dist.get_rank() == 0:
                     preds = np.concatenate(
                         [all_preds[i] for i in range(dist.get_world_size())], axis=0
