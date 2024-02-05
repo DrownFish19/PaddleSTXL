@@ -57,22 +57,21 @@ parser.add_argument("--fp16", type=bool, default=True, help="")
 parser.add_argument("--distribute", type=bool, default=True, help="")
 
 
-def get_args_from_json(json_file_path, args_dict):
-    json_dict = json_file_path
-    with open(json_dict) as f:
-        summary_dict = json.load(fp=f)
+def get_args_from_json(json_file_path, args_obj):
+    with open(json_file_path) as f:
+        json_dict = json.load(fp=f)
 
-    for key in summary_dict.keys():
-        args_dict[key] = summary_dict[key]
+    for key in json_dict.keys():
+        setattr(args_obj, key, json_dict[key])
 
-    return args_dict
+    return args_obj
 
 
-args_dict = vars(parser.parse_args())
-args = get_args_from_json("configs/PEMS.json", args_dict)
-# args = get_args_from_json("configs/PEMS03.json", args_dict)
-# args = get_args_from_json("configs/PEMS04.json", args_dict)
-# args = get_args_from_json("configs/PEMS07.json", args_dict)
-# args = get_args_from_json("configs/PEMS08.json", args_dict)
-# args = get_args_from_json("configs/HZME_INFLOW.json", args_dict)
-# args = get_args_from_json("configs/HZME_OUTFLOW.json", args_dict)
+args_obj = parser.parse_args()
+args = get_args_from_json("configs/PEMS.json", args_obj)
+# args = get_args_from_json("configs/PEMS03.json", args_obj)
+# args = get_args_from_json("configs/PEMS04.json", args_obj)
+# args = get_args_from_json("configs/PEMS07.json", args_obj)
+# args = get_args_from_json("configs/PEMS08.json", args_obj)
+# args = get_args_from_json("configs/HZME_INFLOW.json", args_obj)
+# args = get_args_from_json("configs/HZME_OUTFLOW.json", args_obj)
