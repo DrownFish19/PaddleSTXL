@@ -1,4 +1,5 @@
 import argparse
+import json
 
 parser = argparse.ArgumentParser(description="Traffic Flow Forecasting")
 
@@ -55,4 +56,23 @@ parser.add_argument("--tqdm", type=bool, default=False, help="")
 parser.add_argument("--fp16", type=bool, default=True, help="")
 parser.add_argument("--distribute", type=bool, default=True, help="")
 
-args = parser.parse_args("")
+
+def get_args_from_json(json_file_path, args_dict):
+    json_dict = json_file_path
+    with open(json_dict) as f:
+        summary_dict = json.load(fp=f)
+
+    for key in summary_dict.keys():
+        args_dict[key] = summary_dict[key]
+
+    return args_dict
+
+
+args_dict = vars(parser.parse_args())
+args = get_args_from_json("configs/PEMS.json", args_dict)
+# args = get_args_from_json("configs/PEMS03.json", args_dict)
+# args = get_args_from_json("configs/PEMS04.json", args_dict)
+# args = get_args_from_json("configs/PEMS07.json", args_dict)
+# args = get_args_from_json("configs/PEMS08.json", args_dict)
+# args = get_args_from_json("configs/HZME_INFLOW.json", args_dict)
+# args = get_args_from_json("configs/HZME_OUTFLOW.json", args_dict)
