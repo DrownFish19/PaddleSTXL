@@ -180,16 +180,22 @@ class Trainer:
         graph_name = f"epoch_{epoch}.graph"
         group_name = f"epoch_{epoch}.group"
         mapping_name = f"epoch_{epoch}.mapping"
+        decoder_tensor_name = f"epoch_{epoch}.decoder"
         params_name = os.path.join(self.save_path, model_name)
         params_opt_name = os.path.join(self.save_path, opt_name)
         params_graph_name = os.path.join(self.save_path, graph_name)
         params_group_name = os.path.join(self.save_path, group_name)
         params_mapping_name = os.path.join(self.save_path, mapping_name)
+        params_decoder_name = os.path.join(self.save_path, decoder_tensor_name)
         paddle.save(self.net.state_dict(), params_name)
         paddle.save(self.optimizer.state_dict(), params_opt_name)
         self.graph.save_graph(params_graph_name)
         self.graph.save_group_graph(params_group_name)
         self.graph.save_group_mapping(params_mapping_name)
+        if isinstance(self.net, paddle.DataParallel):
+            np.save(params_decoder_name, self.net._layers.decoder_output.numpy())
+        else:
+            np.save(params_decoder_name, self.net.decoder_output.numpy())
         self.logger.info(f"save parameters to file: {params_name}")
 
     def _load_best_params(self):
