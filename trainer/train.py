@@ -259,7 +259,8 @@ class Trainer:
 
             if epoch % self.training_args.eval_interval_epochs == 0 and epoch > 0:
                 eval_loss = self.eval()
-                self.test()
+                self._save_params(epoch)
+
                 if dist.get_rank() == 0:
                     self.writer.add_scalar("eval/loss", eval_loss, epoch)
                     if eval_loss < best_eval_loss:
@@ -267,9 +268,8 @@ class Trainer:
                         best_epoch = epoch
                         self.logger.info(f"best_epoch: {best_epoch}")
                         self.logger.info(f"eval_loss: {eval_loss}")
-
                         self._save_best_params()
-                        self._save_params(epoch)
+                        # self.test()
 
             if epoch == stop_update_graph:
                 self.logger.info(
@@ -282,10 +282,11 @@ class Trainer:
                 and epoch > start_update_graph
                 and epoch < stop_update_graph
             ):
-                if isinstance(self.net, paddle.DataParallel):
-                    self.net._layers.update_graph()
-                else:
-                    self.net.update_graph()
+                with amp_guard_context(self.training_args.fp16):
+                    if isinstance(self.net, paddle.DataParallel):
+                        self.net._layers.update_graph()
+                    else:
+                        self.net.update_graph()
 
         self.logger.info(f"best epoch: {best_epoch}")
         self.logger.info("apply the best val model on the test dataset ...")

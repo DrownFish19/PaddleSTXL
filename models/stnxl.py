@@ -80,10 +80,17 @@ class STNXL(nn.Layer):
     def decode(self, encoder_output, tgt, tgt_idx):
         tgt_dense = self.decoder_embedding(tgt, tgt_idx)
         decoder_output = self.decoder(x=tgt_dense, memory=encoder_output)
-        if self.decoder_output is None:
-            self.decoder_output = decoder_output
-        else:
-            self.decoder_output = 0.9 * self.decoder_output + 0.1 * decoder_output
+        if self.train:
+            is_nan = paddle.isnan(decoder_output).any()
+            is_inf = paddle.isinf(decoder_output).any()
+
+            if not is_nan and not is_inf:
+                if self.decoder_output is None:
+                    self.decoder_output = decoder_output
+                else:
+                    self.decoder_output = (
+                        0.9 * self.decoder_output + 0.1 * decoder_output
+                    )
         return self.generator(decoder_output)
 
     def load_graph(self, graph_file):
@@ -101,8 +108,8 @@ class STNXL(nn.Layer):
                 corr, k=self.training_args.node_top_k, axis=-1
             )
             values = paddle.nn.functional.softmax(values, axis=-1)
-            self.corr_values = paddle.clone(values.detach())
-            self.corr_indices = paddle.clone(indices.detach())
+            self.corr_values = deepcopy(values.detach())
+            self.corr_indices = deepcopy(indices.detach())
 
             values, indices = values.numpy(), indices.numpy()
             edge_src, edge_dst, edge_weights = [], [], []
@@ -123,6 +130,8 @@ class STNXL(nn.Layer):
             self.graph.build_group_graph(n=2)
             self.apply(self.apply_new_graph)
             self.apply(self.apply_correlation)
+
+        paddle.device.cuda.empty_cache()
 
     def apply_new_graph(self, layer):
         if isinstance(layer, SpatialGraphNeuralNetwork):
