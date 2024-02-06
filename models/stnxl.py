@@ -81,7 +81,7 @@ class STNXL(nn.Layer):
     def decode(self, encoder_output, tgt, tgt_idx):
         tgt_dense = self.decoder_embedding(tgt, tgt_idx)
         decoder_output = self.decoder(x=tgt_dense, memory=encoder_output)
-        if self.train:
+        if self.training:
             is_nan = paddle.isnan(decoder_output).any()
             is_inf = paddle.isinf(decoder_output).any()
 
@@ -90,7 +90,7 @@ class STNXL(nn.Layer):
                     self.decoder_output = decoder_output
                 else:
                     self.decoder_output = (
-                        0.9 * self.decoder_output + 0.1 * decoder_output
+                        0.99 * self.decoder_output + 0.01 * decoder_output
                     )
         return self.generator(decoder_output)
 
