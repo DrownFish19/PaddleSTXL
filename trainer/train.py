@@ -441,3 +441,7 @@ class Trainer:
     def run_test(self):
         self._load_best_params()
         self.test()
+
+    def run_eval(self):
+        self._load_best_params()
+        self.eval()

@@ -98,7 +98,8 @@ class STNXL(nn.Layer):
         self.graph.load_graph(graph_file)
         self.graph.build_group_graph(n=2)
         self.apply(self.apply_new_graph)
-        self.apply(self.apply_correlation)
+        # corr value and indices will load from state dict
+        # self.apply(self.apply_correlation)
 
     def update_graph(self):
         with paddle.no_grad():
