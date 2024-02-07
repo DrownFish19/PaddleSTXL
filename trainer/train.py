@@ -1,4 +1,5 @@
 import contextlib
+import math
 import os
 from time import time
 
@@ -327,15 +328,16 @@ class Trainer:
             for batch_data in self.test_dataloader:
                 his, his_mask, his_idx, tgt, tgt_mask, tgt_idx = batch_data
                 predict_output, _ = self.test_one_step(*batch_data)
-
+                predict_output = predict_output * tgt_mask
+                tgt = tgt * tgt_mask
                 preds.append(predict_output.detach().numpy())
                 tgts.append(tgt.detach().numpy())
             self.logger.info(f"test time on whole data: {time() - start_time}s")
 
-            preds = np.concatenate(preds, axis=0)  # [B,N,T,1]
-            trues = np.concatenate(tgts, axis=0)  # [B,N,T,F]
-            preds = self.test_dataset.inverse_transform(preds, axis=-1)  # [B,N,T,1]
-            trues = self.test_dataset.inverse_transform(trues, axis=-1)  # [B,N,T,1]
+            preds = np.concatenate(preds, axis=0)
+            trues = np.concatenate(tgts, axis=0)
+            preds = self.test_dataset.inverse_transform(preds, axis=-1)
+            trues = self.test_dataset.inverse_transform(trues, axis=-1)
 
             self.logger.info(f"preds: {str(preds.shape)}")
             self.logger.info(f"tgts: {trues.shape}")
@@ -367,6 +369,8 @@ class Trainer:
                 mae = skmetrics.mean_absolute_error(tgt, pred)
                 rmse = skmetrics.mean_squared_error(tgt, pred) ** 0.5
                 mape = masked_mape_np(tgt, pred, 0)
+                if "HZME" in self.training_args.whole_data_path:
+                    mae, rmse, mape = self.convert_error_for_hzme(mae, rmse, mape)
                 self.logger.info(f"{i} MAE: {mae}")
                 self.logger.info(f"{i} RMSE: {rmse}")
                 self.logger.info(f"{i} MAPE: {mape}")
@@ -378,6 +382,8 @@ class Trainer:
             mae = skmetrics.mean_absolute_error(trues, preds)
             rmse = skmetrics.mean_squared_error(trues, preds) ** 0.5
             mape = masked_mape_np(trues, preds, 0)
+            if "HZME" in self.training_args.whole_data_path:
+                mae, rmse, mape = self.convert_error_for_hzme(mae, rmse, mape)
             self.logger.info(f"all MAE: {mae}")
             self.logger.info(f"all RMSE: {rmse}")
             self.logger.info(f"all MAPE: {mape}")
@@ -401,6 +407,7 @@ class Trainer:
                 src=his, src_idx=his_idx, tgt=decoder_input, tgt_idx=tgt_idx
             )
             decoder_output = decoder_output * tgt_mask
+            tgt = tgt * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
         if self.net.training:
             if self.training_args.fp16:
@@ -423,6 +430,7 @@ class Trainer:
                 src=his, src_idx=his_idx, tgt=decoder_input, tgt_idx=tgt_idx
             )
             decoder_output = decoder_output * tgt_mask
+            tgt = tgt * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
         return decoder_output, loss
 
@@ -434,6 +442,7 @@ class Trainer:
                 src=his, src_idx=his_idx, tgt=decoder_input, tgt_idx=tgt_idx
             )
             decoder_output = decoder_output * tgt_mask
+            tgt = tgt * tgt_mask
             loss = self.criterion1(decoder_output, tgt)
         return decoder_output, loss
 
@@ -444,3 +453,14 @@ class Trainer:
     def run_eval(self):
         self._load_best_params()
         self.eval()
+
+    def convert_error_for_hzme(self, mae, rmse, mape):
+        """
+        on the HZME dataset,
+        3/4 data is training, eval, test.
+        However, metrics are calculated on the whole data.
+        1. MAE. MAE = MAE * 4 / 3
+        2. RMSE. RMSE = sqrt(RMSE^2 * 4 / 3)
+        3. MAPE. MAPE = MAPE * 4 / 3
+        """
+        return mae * 4 / 3, math.sqrt(rmse * rmse * 4 / 3), mape * 4 / 3
