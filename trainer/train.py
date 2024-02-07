@@ -269,7 +269,6 @@ class Trainer:
                         self.logger.info(f"best_epoch: {best_epoch}")
                         self.logger.info(f"eval_loss: {eval_loss}")
                         self._save_best_params()
-                        # self.test()
 
             if epoch == stop_update_graph:
                 self.logger.info(
