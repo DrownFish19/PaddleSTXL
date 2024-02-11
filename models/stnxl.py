@@ -107,7 +107,6 @@ class STNXL(nn.Layer):
             if dist.get_world_size() > 1:
                 dist.all_reduce(self.decoder_output)
                 self.decoder_output /= dist.get_world_size()
-                paddle.device.cuda.empty_cache()
 
             corr = paddle.einsum(
                 "btnd,btmd->nm", self.decoder_output, self.decoder_output
@@ -138,6 +137,7 @@ class STNXL(nn.Layer):
             self.graph.build_group_graph(n=2)
             self.apply(self.apply_new_graph)
             self.apply(self.apply_correlation)
+            paddle.device.cuda.empty_cache()
 
     def apply_new_graph(self, layer):
         if isinstance(layer, SpatialGraphNeuralNetwork):

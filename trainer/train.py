@@ -288,6 +288,8 @@ class Trainer:
                     else:
                         self.net.update_graph()
 
+            paddle.device.cuda.empty_cache()
+
         self.logger.info(f"best epoch: {best_epoch}")
         self.logger.info("apply the best val model on the test dataset ...")
         self._load_best_params()
@@ -309,12 +311,12 @@ class Trainer:
             all_eval_loss = []
             if dist.get_world_size() > 1:
                 dist.all_gather_object(all_eval_loss, eval_loss)
-                paddle.device.cuda.empty_cache()
                 eval_loss = np.mean(
                     [all_eval_loss[i] for i in range(dist.get_world_size())]
                 )
                 self.logger.info(f"eval cost time: {time() - start_time}s")
                 self.logger.info(f"eval_loss: {eval_loss}")
+                paddle.device.cuda.empty_cache()
         return eval_loss
 
     def test(self):
@@ -347,7 +349,6 @@ class Trainer:
                 all_trues = []
                 dist.all_gather_object(all_preds, preds)
                 dist.all_gather_object(all_trues, trues)
-                paddle.device.cuda.empty_cache()
                 if dist.get_rank() == 0:
                     preds = np.concatenate(
                         [all_preds[i] for i in range(dist.get_world_size())], axis=0
@@ -355,7 +356,9 @@ class Trainer:
                     trues = np.concatenate(
                         [all_trues[i] for i in range(dist.get_world_size())], axis=0
                     )
+                    paddle.device.cuda.empty_cache()
                 else:
+                    paddle.device.cuda.empty_cache()
                     return
 
             # 计算误差
