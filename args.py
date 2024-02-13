@@ -69,6 +69,8 @@ def get_args_from_json(json_file_path, args_obj):
 
 args_obj = parser.parse_args()
 args = get_args_from_json("configs/PEMS.json", args_obj)
+# args = get_args_from_json("configs/PEMS-LSTM.json", args_obj)
+# args = get_args_from_json("configs/PEMS-STGCN.json", args_obj)
 # args = get_args_from_json("configs/PEMS03.json", args_obj)
 # args = get_args_from_json("configs/PEMS04.json", args_obj)
 # args = get_args_from_json("configs/PEMS07.json", args_obj)

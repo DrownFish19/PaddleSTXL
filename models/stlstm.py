@@ -17,8 +17,8 @@ class STLSTM(nn.Layer):
             training_args.d_model, training_args.decoder_output_size
         )
 
-    def encode(self, src):
-        src_dense = self.embedding(src)  # B,T,N,D
+    def encode(self, src, idx):
+        src_dense = self.embedding(src, idx)  # B,T,N,D
         B, T, N, D = src_dense.shape
         src_dense = src_dense.transpose([0, 2, 1, 3]).reshape([B * N, T, D])
         encoder_output, _ = self.lstm(src_dense)
@@ -29,7 +29,7 @@ class STLSTM(nn.Layer):
     def decode(self, encoder_output, tgt):
         return self.generator(encoder_output)
 
-    def forward(self, src, tgt):
-        encoder_output = self.encode(src)
+    def forward(self, src, src_idx, tgt, tgt_idx):
+        encoder_output = self.encode(src, src_idx)
         output = self.decode(encoder_output, tgt)
         return output

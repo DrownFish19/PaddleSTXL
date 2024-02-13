@@ -33,7 +33,7 @@ class STGCN(nn.Layer):
         self.st_blocks = nn.Sequential(*st_blocks)
         self.output = OutputBlock(self.args)
 
-    def forward(self, src, tgt):
+    def forward(self, src, src_idx, tgt, tgt_idx):
         x = src
         for st_block in self.st_blocks:
             x = st_block(x)
